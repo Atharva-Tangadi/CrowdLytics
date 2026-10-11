@@ -77,12 +77,9 @@ class AerialBlobDensityDetector(BaseDetector):
 
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if len(image.shape) == 3 else image
         
-        # Adaptive thresholding and morphological filtering to isolate head/torso blobs
-        blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-        thresh = cv2.adaptiveThreshold(
-            blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
-            cv2.THRESH_BINARY_INV, 15, 3
-        )
+        # Normalize and apply Otsu thresholding for distinct blob segmentation
+        blurred = cv2.GaussianBlur(gray, (3, 3), 0)
+        _, thresh = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 
         contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         

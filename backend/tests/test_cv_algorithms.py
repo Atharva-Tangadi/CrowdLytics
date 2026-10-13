@@ -213,3 +213,51 @@ def test_group_visualizer_rendering():
     assert annotated.shape == img.shape
     # Check that overlay pixels are modified (non-black pixels present)
     assert np.any(annotated > 0)
+
+
+# --- 8. Linkage Comparison & Cophenetic Faithfulness Tests ---
+def test_hac_linkage_method_comparison():
+    """Compare Ward, Complete, and Average linkage criteria on synthetic clusters."""
+    np.random.seed(42)
+    c1 = np.random.normal(loc=[30, 30], scale=5, size=(10, 2))
+    c2 = np.random.normal(loc=[150, 150], scale=6, size=(10, 2))
+    points = [DetectionPoint(x=float(x), y=float(y), confidence=0.9) for x, y in np.vstack([c1, c2])]
+
+    for method in ["ward", "complete", "average"]:
+        clusterer = HierarchicalClusterer(distance_threshold=40.0, linkage_method=method)
+        res = clusterer.cluster(points)
+        assert len(res.clusters) == 2, f"Expected 2 clusters for {method} linkage"
+        assert res.cophenetic_correlation is not None
+        assert res.cophenetic_correlation >= 0.85, f"Low cophenetic correlation for {method} linkage"
+
+
+# --- 9. Additional Formation Dynamic Tests ---
+def test_formation_tracker_splitting_and_contraction():
+    """Test group splitting and group contraction temporal events."""
+    from app.cv.clustering.hac import ClusterGroup
+    from app.cv.closeness.estimator import GroupClosenessMetrics
+
+    tracker = FormationTracker()
+
+    # Time Window 1: Single unified cluster
+    c_single = ClusterGroup(cluster_id=1, member_indices=[0, 1, 2, 3], member_points=[], centroid=[50.0, 50.0], size=4, bounding_box=[30, 30, 70, 70])
+    m_single = GroupClosenessMetrics(cluster_id=1, size=4, mean_nn_distance=15, median_nn_distance=15, mean_pairwise_distance=20, dispersion=20, convex_hull_area=400, density_per_kpx=10, is_degenerate=False)
+
+    # Time Window 2: Partitioned into two separate clusters (Splitting)
+    c_split1 = ClusterGroup(cluster_id=1, member_indices=[0, 1], member_points=[], centroid=[35.0, 35.0], size=2, bounding_box=[30, 30, 40, 40])
+    c_split2 = ClusterGroup(cluster_id=2, member_indices=[2, 3], member_points=[], centroid=[65.0, 65.0], size=2, bounding_box=[60, 60, 70, 70])
+    m_split1 = GroupClosenessMetrics(cluster_id=1, size=2, mean_nn_distance=8, median_nn_distance=8, mean_pairwise_distance=8, dispersion=5, convex_hull_area=50, density_per_kpx=40, is_degenerate=False)
+    m_split2 = GroupClosenessMetrics(cluster_id=2, size=2, mean_nn_distance=8, median_nn_distance=8, mean_pairwise_distance=8, dispersion=5, convex_hull_area=50, density_per_kpx=40, is_degenerate=False)
+
+    split_records = tracker.analyze_temporal_transitions([c_single], [m_single], [c_split1, c_split2], [m_split1, m_split2])
+    split_types = [r.formation_type for r in split_records]
+    assert FormationType.SPLITTING in split_types
+
+    # Contraction test: area drops > 20% and dispersion decreases
+    m_contracted = GroupClosenessMetrics(cluster_id=1, size=4, mean_nn_distance=10, median_nn_distance=10, mean_pairwise_distance=12, dispersion=10, convex_hull_area=150, density_per_kpx=26.6, is_degenerate=False)
+    c_contracted = ClusterGroup(cluster_id=1, member_indices=[0, 1, 2, 3], member_points=[], centroid=[51.0, 51.0], size=4, bounding_box=[40, 40, 60, 60])
+
+    contract_records = tracker.analyze_temporal_transitions([c_single], [m_single], [c_contracted], [m_contracted])
+    contract_types = [r.formation_type for r in contract_records]
+    assert FormationType.CONTRACTING in contract_types
+

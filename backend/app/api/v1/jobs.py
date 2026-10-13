@@ -51,8 +51,21 @@ def start_analysis_job(
     db.commit()
     db.refresh(job)
 
-    # Dispatch to background task execution
-    background_tasks.add_task(execute_analysis_job, job.id)
+    # Dispatch to asynchronous execution (Celery if configured, otherwise BackgroundTasks)
+    import os
+    use_celery = os.getenv("USE_CELERY", "false").lower() in ("true", "1")
+    dispatched = False
+    if use_celery:
+        try:
+            from app.workers.celery_worker import celery_app, celery_execute_analysis_job
+            if celery_app:
+                celery_execute_analysis_job.delay(job.id)
+                dispatched = True
+        except Exception:
+            dispatched = False
+
+    if not dispatched:
+        background_tasks.add_task(execute_analysis_job, job.id)
 
     return job
 

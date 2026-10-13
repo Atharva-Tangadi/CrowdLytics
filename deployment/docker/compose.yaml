@@ -8,7 +8,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-crowdlytics_secret}
       POSTGRES_DB: ${POSTGRES_DB:-crowdlytics}
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -22,7 +22,7 @@ services:
     container_name: crowdlytics_redis
     restart: unless-stopped
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -36,20 +36,53 @@ services:
     container_name: crowdlytics_backend
     restart: unless-stopped
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     environment:
       - ENVIRONMENT=production
       - DATABASE_URL=postgresql+psycopg2://${POSTGRES_USER:-crowdlytics}:${POSTGRES_PASSWORD:-crowdlytics_secret}@db:5432/${POSTGRES_DB:-crowdlytics}
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/0
       - SECRET_KEY=${SECRET_KEY:-production-secret-change-me}
       - STORAGE_TYPE=local
-      - MEDIA_ROOT=/app/storage
+      - DATA_ROOT=/app/data
+      - MEDIA_ROOT=/app/data/uploads
+      - PROCESSED_ROOT=/app/data/processed
+      - RESULTS_ROOT=/app/data/results
+      - TEMPORARY_ROOT=/app/data/temporary
     depends_on:
       db:
         condition: service_healthy
       redis:
         condition: service_healthy
     volumes:
-      - media_storage:/app/storage
+      - ../../data:/app/data
+
+  worker:
+    build:
+      context: ../../backend
+      dockerfile: Dockerfile
+    container_name: crowdlytics_worker
+    restart: unless-stopped
+    command: python -m app.workers.celery_worker
+    environment:
+      - ENVIRONMENT=production
+      - DATABASE_URL=postgresql+psycopg2://${POSTGRES_USER:-crowdlytics}:${POSTGRES_PASSWORD:-crowdlytics_secret}@db:5432/${POSTGRES_DB:-crowdlytics}
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - SECRET_KEY=${SECRET_KEY:-production-secret-change-me}
+      - STORAGE_TYPE=local
+      - DATA_ROOT=/app/data
+      - MEDIA_ROOT=/app/data/uploads
+      - PROCESSED_ROOT=/app/data/processed
+      - RESULTS_ROOT=/app/data/results
+      - TEMPORARY_ROOT=/app/data/temporary
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ../../data:/app/data
 
   frontend:
     build:
@@ -58,10 +91,9 @@ services:
     container_name: crowdlytics_frontend
     restart: unless-stopped
     ports:
-      - "80:80"
+      - "127.0.0.1:5173:80"
     depends_on:
       - backend
 
 volumes:
   postgres_data:
-  media_storage:

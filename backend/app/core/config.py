@@ -22,9 +22,13 @@ class Settings(BaseSettings):
     # Database
     DATABASE_URL: str = f"sqlite:///{BASE_DIR}/crowdlytics.db"
 
-    # Storage
-    STORAGE_TYPE: str = "local"  # 'local' or 's3'
-    MEDIA_ROOT: str = str(BASE_DIR / "storage")
+    # Storage (Local-First Layout)
+    STORAGE_TYPE: str = "local"
+    DATA_ROOT: str = str(BASE_DIR.parent / "data")
+    MEDIA_ROOT: str = str(BASE_DIR.parent / "data" / "uploads")
+    PROCESSED_ROOT: str = str(BASE_DIR.parent / "data" / "processed")
+    RESULTS_ROOT: str = str(BASE_DIR.parent / "data" / "results")
+    TEMPORARY_ROOT: str = str(BASE_DIR.parent / "data" / "temporary")
 
     # Limits
     MAX_IMAGE_SIZE_MB: int = 50

@@ -17,6 +17,7 @@ COPY pyproject.toml README.md ./
 RUN pip install --upgrade pip && pip install .
 
 COPY . .
+RUN mkdir -p /app/data/uploads /app/data/processed /app/data/results /app/data/temporary
 
 EXPOSE 8000
 

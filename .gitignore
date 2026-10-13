@@ -21,6 +21,7 @@ wheels/
 .installed.cfg
 *.egg
 .venv
+.venv-win/
 venv/
 ENV/
 
@@ -42,6 +43,18 @@ coverage/
 *.env.local
 storage/
 media_uploads/
+*.db
+*.sqlite
+*.sqlite3
+*.log
+
+# Local Media Storage (Private by Design)
+data/uploads/*
+data/processed/*
+data/results/*
+data/temporary/*
+!data/**/.gitkeep
+
 
 # IDE & OS
 .vscode/

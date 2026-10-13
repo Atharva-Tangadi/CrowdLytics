@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
-from app.models.entities import User, AnalysisSession
+from app.models.entities import User, AnalysisSession, MediaAsset
 from app.auth.deps import get_current_user
 from app.schemas.api import SessionCreateRequest, SessionResponse
 
@@ -67,6 +67,12 @@ def delete_session(
     ).first()
     if not session:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found.")
+
+    # Clean up physical media files from disk storage
+    media_assets = db.query(MediaAsset).filter(MediaAsset.session_id == session.id).all()
+    from app.storage.service import storage_service
+    for m in media_assets:
+        storage_service.delete_file(m.storage_path)
 
     db.delete(session)
     db.commit()

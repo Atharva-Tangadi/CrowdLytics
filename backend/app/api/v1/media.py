@@ -95,3 +95,32 @@ def get_media_file(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File missing on disk.")
 
     return FileResponse(path=str(resolved_path), media_type=asset.mime_type)
+
+
+@router.delete("/{session_id}/media/{media_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_media(
+    session_id: str,
+    media_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Deletes an individual media asset from an owned session."""
+    session = db.query(AnalysisSession).filter(
+        AnalysisSession.id == session_id,
+        AnalysisSession.user_id == current_user.id
+    ).first()
+    if not session:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found.")
+
+    asset = db.query(MediaAsset).filter(
+        MediaAsset.id == media_id,
+        MediaAsset.session_id == session.id
+    ).first()
+    if not asset:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Media asset not found.")
+
+    storage_service.delete_file(asset.storage_path)
+    db.delete(asset)
+    db.commit()
+    return None
+

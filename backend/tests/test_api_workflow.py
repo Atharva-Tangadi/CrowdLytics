@@ -144,3 +144,60 @@ def test_media_upload_and_analysis_pipeline():
     export_csv = client.get(f"/api/v1/sessions/{session_id}/results/export?format=csv", headers=headers)
     assert export_csv.status_code == 200
     assert "cluster_id,member_count" in export_csv.text
+
+
+def test_job_cancellation():
+    """Verify that a queued or running job can be cancelled."""
+    client.post("/api/v1/auth/register", json={"email": "cancel_user@example.com", "password": "Password123"})
+    token = client.post("/api/v1/auth/login", json={"email": "cancel_user@example.com", "password": "Password123"}).json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    sess_id = client.post("/api/v1/sessions", json={"title": "Cancel Test"}, headers=headers).json()["id"]
+
+    img = np.zeros((100, 100, 3), dtype=np.uint8)
+    _, enc = cv2.imencode(".png", img)
+    media_id = client.post(
+        f"/api/v1/sessions/{sess_id}/media",
+        files={"file": ("test.png", enc.tobytes(), "image/png")},
+        headers=headers
+    ).json()["id"]
+
+    # Create job directly in DB as QUEUED to test cancel without background race
+    db = SessionLocal()
+    job = AnalysisJob(session_id=sess_id, media_asset_id=media_id, status="QUEUED", progress_pct=0, current_stage="Queued")
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+    job_id = job.id
+    db.close()
+
+    cancel_resp = client.post(f"/api/v1/jobs/{job_id}/cancel", headers=headers)
+    assert cancel_resp.status_code == 200
+    assert cancel_resp.json()["status"] == "CANCELLED"
+
+
+def test_delete_individual_media_asset():
+    """Verify deleting an individual media asset cleans up DB and disk storage."""
+    client.post("/api/v1/auth/register", json={"email": "del_media@example.com", "password": "Password123"})
+    token = client.post("/api/v1/auth/login", json={"email": "del_media@example.com", "password": "Password123"}).json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    sess_id = client.post("/api/v1/sessions", json={"title": "Delete Media Test"}, headers=headers).json()["id"]
+
+    img = np.zeros((100, 100, 3), dtype=np.uint8)
+    _, enc = cv2.imencode(".png", img)
+    media_resp = client.post(
+        f"/api/v1/sessions/{sess_id}/media",
+        files={"file": ("temp.png", enc.tobytes(), "image/png")},
+        headers=headers
+    )
+    media_id = media_resp.json()["id"]
+
+    # Delete media asset
+    del_resp = client.delete(f"/api/v1/sessions/{sess_id}/media/{media_id}", headers=headers)
+    assert del_resp.status_code == 204
+
+    # Verify media asset is no longer listed
+    list_resp = client.get(f"/api/v1/sessions/{sess_id}/media", headers=headers)
+    assert len(list_resp.json()) == 0
+

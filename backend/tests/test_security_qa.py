@@ -145,3 +145,119 @@ def test_cascade_deletion():
     assert client.get(f"/api/v1/sessions/{session_id}", headers=headers).status_code == 404
     # Verify job is gone
     assert client.get(f"/api/v1/jobs/{job_id}", headers=headers).status_code == 404
+
+
+# --- 5. Worker Failure & Resilience Tests ---
+def test_worker_missing_file_failure():
+    """Verify worker transitions job to FAILED when media file is missing or unreadable."""
+    from app.workers.analysis_worker import execute_analysis_job
+
+    client.post("/api/v1/auth/register", json={"email": "fail_test@example.com", "password": "Password123"})
+    token = client.post("/api/v1/auth/login", json={"email": "fail_test@example.com", "password": "Password123"}).json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+    session_id = client.post("/api/v1/sessions", json={"title": "Failure Session"}, headers=headers).json()["id"]
+
+    # Upload valid image first
+    img = np.zeros((100, 100, 3), dtype=np.uint8)
+    _, enc = cv2.imencode(".png", img)
+    media = client.post(
+        f"/api/v1/sessions/{session_id}/media",
+        files={"file": ("test.png", enc.tobytes(), "image/png")},
+        headers=headers
+    ).json()
+
+    # Manually delete media asset from DB to trigger worker failure
+    db = SessionLocal()
+    job = AnalysisJob(
+        session_id=session_id,
+        media_asset_id="non-existent-media-uuid",
+        status="QUEUED",
+        progress_pct=0,
+        current_stage="Queued"
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+    job_id = job.id
+    db.close()
+
+    # Run worker directly
+    execute_analysis_job(job_id)
+
+    db = SessionLocal()
+    updated_job = db.query(AnalysisJob).filter(AnalysisJob.id == job_id).first()
+    assert updated_job.status == "FAILED"
+    assert "not found" in updated_job.error_message.lower()
+    db.close()
+
+
+# --- 6. End-to-End Video Analysis Workflow Test ---
+def test_video_analysis_pipeline_workflow(tmp_path):
+    """Verify video upload, background processing, motion analysis, and formation tracking."""
+    client.post("/api/v1/auth/register", json={"email": "video_tester@example.com", "password": "Password123"})
+    token = client.post("/api/v1/auth/login", json={"email": "video_tester@example.com", "password": "Password123"}).json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+    session_id = client.post("/api/v1/sessions", json={"title": "Drone Video Test"}, headers=headers).json()["id"]
+
+    # Create a small synthetic 15-frame video file
+    video_path = tmp_path / "synthetic_drone.mp4"
+    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+    out = cv2.VideoWriter(str(video_path), fourcc, 10.0, (200, 200))
+
+    # Moving cluster moving right (+dx per frame)
+    for f_idx in range(15):
+        frame = np.zeros((200, 200, 3), dtype=np.uint8)
+        # Background reference dots
+        cv2.circle(frame, (20, 20), 2, (100, 100, 100), -1)
+        cv2.circle(frame, (180, 20), 2, (100, 100, 100), -1)
+        cv2.circle(frame, (20, 180), 2, (100, 100, 100), -1)
+
+        # Moving crowd dots
+        shift = f_idx * 3
+        cv2.circle(frame, (50 + shift, 100), 4, (255, 255, 255), -1)
+        cv2.circle(frame, (60 + shift, 105), 4, (255, 255, 255), -1)
+        cv2.circle(frame, (55 + shift, 115), 4, (255, 255, 255), -1)
+        out.write(frame)
+    out.release()
+
+    with open(video_path, "rb") as vf:
+        video_bytes = vf.read()
+
+    # Upload Video
+    upload_resp = client.post(
+        f"/api/v1/sessions/{session_id}/media",
+        files={"file": ("synthetic_drone.mp4", video_bytes, "video/mp4")},
+        headers=headers
+    )
+    assert upload_resp.status_code == 201
+    media_data = upload_resp.json()
+    assert media_data["media_type"] == "VIDEO"
+    assert media_data["frame_count"] == 15
+
+    # Run Analysis Job
+    analyze_resp = client.post(
+        f"/api/v1/sessions/{session_id}/analyze",
+        json={
+            "media_asset_id": media_data["id"],
+            "confidence_threshold": 0.2,
+            "distance_threshold": 40.0,
+            "linkage_method": "ward",
+            "sample_interval_frames": 3
+        },
+        headers=headers
+    )
+    assert analyze_resp.status_code == 202
+    job_id = analyze_resp.json()["id"]
+
+    # Verify Job Completed
+    job_resp = client.get(f"/api/v1/jobs/{job_id}", headers=headers)
+    assert job_resp.status_code == 200
+    assert job_resp.json()["status"] == "COMPLETED"
+
+    # Verify Results contain video motion & formation data
+    res_resp = client.get(f"/api/v1/sessions/{session_id}/results", headers=headers)
+    assert res_resp.status_code == 200
+    res = res_resp.json()
+    assert res["total_crowd_count"] >= 1
+    assert res["dominant_formation_type"] is not None
+

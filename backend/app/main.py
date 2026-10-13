@@ -5,6 +5,18 @@ from app.core.config import settings
 from app.api.health import router as health_router
 
 
+from contextlib import asynccontextmanager
+from app.db.session import engine, Base
+import app.models  # noqa: F401
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Ensure database schema is initialized on startup
+    Base.metadata.create_all(bind=engine)
+    yield
+
+
 def create_app() -> FastAPI:
     app = FastAPI(
         title=settings.PROJECT_NAME,
@@ -13,6 +25,7 @@ def create_app() -> FastAPI:
         openapi_url=f"{settings.API_V1_STR}/openapi.json",
         docs_url=f"{settings.API_V1_STR}/docs",
         redoc_url=f"{settings.API_V1_STR}/redoc",
+        lifespan=lifespan,
     )
 
     # Configure CORS

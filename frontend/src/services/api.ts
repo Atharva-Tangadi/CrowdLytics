@@ -112,6 +112,18 @@ class ApiClient {
     return `${API_BASE}/sessions/media/${mediaId}/file`;
   }
 
+  async getMediaBlobUrl(mediaId: string): Promise<string> {
+    const token = localStorage.getItem('token');
+    const res = await fetch(`${API_BASE}/sessions/media/${mediaId}/file`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!res.ok) {
+      throw new Error(`Failed to load media (${res.status})`);
+    }
+    const blob = await res.blob();
+    return URL.createObjectURL(blob);
+  }
+
   // --- Analysis & Jobs ---
   async startAnalysis(sessionId: string, config: AnalysisConfig): Promise<AnalysisJob> {
     return this.request<AnalysisJob>(`/sessions/${sessionId}/analyze`, {
@@ -137,6 +149,25 @@ class ApiClient {
 
   getExportUrl(sessionId: string, format: 'json' | 'csv'): string {
     return `${API_BASE}/sessions/${sessionId}/results/export?format=${format}`;
+  }
+
+  async downloadExport(sessionId: string, format: 'json' | 'csv'): Promise<void> {
+    const token = localStorage.getItem('token');
+    const res = await fetch(this.getExportUrl(sessionId, format), {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!res.ok) {
+      throw new Error(`Export failed (${res.status})`);
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `crowd_analysis_${sessionId}.${format}`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
   }
 }
 

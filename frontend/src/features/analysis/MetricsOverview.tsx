@@ -69,20 +69,18 @@ export const MetricsOverview: React.FC<{ sessionId: string; result: AnalysisResu
             <h3 className="text-base font-semibold text-white">Group-Level Hierarchy Details</h3>
           </div>
           <div className="flex gap-2">
-            <a
-              href={api.getExportUrl(sessionId, 'json')}
-              download
-              className="px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs font-medium flex items-center gap-1.5 transition-colors"
+            <button
+              onClick={() => api.downloadExport(sessionId, 'json')}
+              className="px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs font-medium flex items-center gap-1.5 transition-colors cursor-pointer"
             >
               <Download className="w-3.5 h-3.5" /> Export JSON
-            </a>
-            <a
-              href={api.getExportUrl(sessionId, 'csv')}
-              download
-              className="px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs font-medium flex items-center gap-1.5 transition-colors"
+            </button>
+            <button
+              onClick={() => api.downloadExport(sessionId, 'csv')}
+              className="px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs font-medium flex items-center gap-1.5 transition-colors cursor-pointer"
             >
               <Download className="w-3.5 h-3.5" /> Export CSV
-            </a>
+            </button>
           </div>
         </div>
 

@@ -54,9 +54,14 @@ export const App: React.FC = () => {
         .then((res) => {
           setActiveResult(res);
           // Fetch media to render canvas
-          api.listMedia(activeSession.id).then((media) => {
+          api.listMedia(activeSession.id).then(async (media) => {
             if (media.length > 0) {
-              setMediaUrl(api.getMediaFileUrl(media[0].id));
+              try {
+                const blobUrl = await api.getMediaBlobUrl(media[0].id);
+                setMediaUrl(blobUrl);
+              } catch {
+                setMediaUrl(api.getMediaFileUrl(media[0].id));
+              }
             } else {
               setMediaUrl(null);
             }
@@ -83,7 +88,12 @@ export const App: React.FC = () => {
               setActiveResult(res);
               const media = await api.listMedia(activeSession.id);
               if (media.length > 0) {
-                setMediaUrl(api.getMediaFileUrl(media[0].id));
+                try {
+                  const blobUrl = await api.getMediaBlobUrl(media[0].id);
+                  setMediaUrl(blobUrl);
+                } catch {
+                  setMediaUrl(api.getMediaFileUrl(media[0].id));
+                }
               }
             }
           }

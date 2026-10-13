@@ -131,8 +131,8 @@ class ApiClient {
     });
   }
 
-  async getResults(sessionId: string): Promise<AnalysisResult> {
-    return this.request<AnalysisResult>(`/sessions/${sessionId}/results`);
+  async getResults(sessionId: string): Promise<AnalysisResult | null> {
+    return this.request<AnalysisResult | null>(`/sessions/${sessionId}/results`);
   }
 
   getExportUrl(sessionId: string, format: 'json' | 'csv'): string {

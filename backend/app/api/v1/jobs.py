@@ -97,13 +97,13 @@ def cancel_job(
     return job
 
 
-@router.get("/sessions/{session_id}/results", response_model=AnalysisResultResponse)
+@router.get("/sessions/{session_id}/results", response_model=Optional[AnalysisResultResponse])
 def get_session_results(
     session_id: str,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Fetches the latest analysis result for a session."""
+    """Fetches the latest analysis result for a session, or returns null if not yet analyzed."""
     session = db.query(AnalysisSession).filter(
         AnalysisSession.id == session_id,
         AnalysisSession.user_id == current_user.id
@@ -116,9 +116,6 @@ def get_session_results(
     ).filter(
         AnalysisJob.session_id == session.id
     ).order_by(CrowdAnalysisResult.created_at.desc()).first()
-
-    if not result:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No analysis results available for this session.")
 
     return result
 

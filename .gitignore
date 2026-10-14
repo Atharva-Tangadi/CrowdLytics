@@ -1,4 +1,6 @@
+# ==========================================
 # Python
+# ==========================================
 __pycache__/
 *.py[cod]
 *$py.class
@@ -20,46 +22,83 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
-.venv
+.venv/
 .venv-win/
 venv/
 ENV/
 
+# ==========================================
 # Testing & Coverage
+# ==========================================
 .pytest_cache/
 .coverage
+.coverage.*
 htmlcov/
+.tox/
+.nox/
 
+# ==========================================
 # Node & Frontend
+# ==========================================
 node_modules/
 dist/
-.npm
+.npm/
 .vite/
 coverage/
 
+# ==========================================
 # Tools & Local Environment
+# ==========================================
 .tools/
 .env
+.env.*
 *.env.local
-storage/
-media_uploads/
-*.db
-*.sqlite
-*.sqlite3
-*.log
+!.env.example
 
+# ==========================================
 # Local Media Storage (Private by Design)
+# ==========================================
+
+# Ignore generated media at the repository root
+/storage/
+
+# Ignore uploaded/generated media under backend
+/backend/storage/
+
+# Ignore generated media and processing outputs
+media_uploads/
 data/uploads/*
 data/processed/*
 data/results/*
 data/temporary/*
+
+# Preserve placeholder files for required directories
 !data/**/.gitkeep
 
+# ==========================================
+# Python Storage Service
+# ==========================================
 
+# Allow the storage implementation to be committed
+!backend/app/storage/
+!backend/app/storage/service.py
+
+# ==========================================
+# Databases, Logs & Runtime Files
+# ==========================================
+*.db
+*.sqlite
+*.sqlite3
+*.log
+*.pid
+
+# ==========================================
 # IDE & OS
+# ==========================================
 .vscode/
 .idea/
 *.swp
 *.swo
 .DS_Store
 Thumbs.db
+desktop.ini

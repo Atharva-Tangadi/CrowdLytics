@@ -4,6 +4,7 @@ import {
   AnalysisSession,
   MediaAsset,
   AnalysisJob,
+  AnalysisChunk,
   AnalysisResult,
   AnalysisConfig,
 } from '../types/api';
@@ -135,6 +136,10 @@ class ApiClient {
 
   async getJob(jobId: string): Promise<AnalysisJob> {
     return this.request<AnalysisJob>(`/jobs/${jobId}`);
+  }
+
+  async getJobChunks(jobId: string): Promise<AnalysisChunk[]> {
+    return this.request<AnalysisChunk[]>(`/jobs/${jobId}/chunks`);
   }
 
   async cancelJob(jobId: string): Promise<AnalysisJob> {

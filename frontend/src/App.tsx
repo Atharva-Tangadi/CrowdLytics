@@ -4,7 +4,7 @@ import { AuthModal } from './features/auth/AuthModal';
 import { ResultCanvas } from './features/analysis/ResultCanvas';
 import { MetricsOverview } from './features/analysis/MetricsOverview';
 import { NewAnalysisModal } from './features/analysis/NewAnalysisModal';
-import { AnalysisSession, AnalysisJob, AnalysisResult } from './types/api';
+import { AnalysisSession, AnalysisJob, AnalysisResult, AnalysisChunk, MediaAsset } from './types/api';
 import { api } from './services/api';
 import {
   Activity,
@@ -23,6 +23,8 @@ export const App: React.FC = () => {
   const [activeSession, setActiveSession] = useState<AnalysisSession | null>(null);
   const [activeJob, setActiveJob] = useState<AnalysisJob | null>(null);
   const [activeResult, setActiveResult] = useState<AnalysisResult | null>(null);
+  const [activeMedia, setActiveMedia] = useState<MediaAsset | null>(null);
+  const [chunks, setChunks] = useState<AnalysisChunk[]>([]);
   const [mediaUrl, setMediaUrl] = useState<string | null>(null);
   const [showNewModal, setShowNewModal] = useState(false);
   const [newTitle, setNewTitle] = useState('');
@@ -49,13 +51,18 @@ export const App: React.FC = () => {
   // Load Results and Media for active session
   useEffect(() => {
     if (activeSession) {
+      setChunks([]);
       api
         .getResults(activeSession.id)
         .then((res) => {
           setActiveResult(res);
+          if (res && res.job_id) {
+            api.getJobChunks(res.job_id).then(setChunks).catch(() => {});
+          }
           // Fetch media to render canvas
           api.listMedia(activeSession.id).then(async (media) => {
             if (media.length > 0) {
+              setActiveMedia(media[0]);
               try {
                 const blobUrl = await api.getMediaBlobUrl(media[0].id);
                 setMediaUrl(blobUrl);
@@ -63,18 +70,21 @@ export const App: React.FC = () => {
                 setMediaUrl(api.getMediaFileUrl(media[0].id));
               }
             } else {
+              setActiveMedia(null);
               setMediaUrl(null);
             }
           });
         })
         .catch(() => {
           setActiveResult(null);
+          setActiveMedia(null);
           setMediaUrl(null);
+          setChunks([]);
         });
     }
   }, [activeSession]);
 
-  // Poll Active Job
+  // Poll Active Job & Progressive Chunks
   useEffect(() => {
     let interval: any = null;
     if (activeJob && (activeJob.status === 'QUEUED' || activeJob.status === 'RUNNING')) {
@@ -82,12 +92,22 @@ export const App: React.FC = () => {
         try {
           const updated = await api.getJob(activeJob.id);
           setActiveJob(updated);
+
+          // Progressively fetch completed chunks while running
+          try {
+            const jobChunks = await api.getJobChunks(activeJob.id);
+            if (jobChunks && jobChunks.length > 0) {
+              setChunks(jobChunks);
+            }
+          } catch {}
+
           if (updated.status === 'COMPLETED') {
             if (activeSession) {
               const res = await api.getResults(activeSession.id);
               setActiveResult(res);
               const media = await api.listMedia(activeSession.id);
               if (media.length > 0) {
+                setActiveMedia(media[0]);
                 try {
                   const blobUrl = await api.getMediaBlobUrl(media[0].id);
                   setMediaUrl(blobUrl);
@@ -280,22 +300,26 @@ export const App: React.FC = () => {
                 </div>
               )}
 
-              {/* Analysis Results Display */}
+              {/* Active Media & Synchronized Canvas Player */}
+              {mediaUrl && (
+                <ResultCanvas
+                  mediaUrl={mediaUrl}
+                  result={activeResult}
+                  chunks={chunks}
+                  mediaType={activeMedia?.media_type || 'IMAGE'}
+                  isAnalyzing={activeJob?.status === 'RUNNING'}
+                />
+              )}
+
+              {/* Analysis Results Metrics Display */}
               {activeResult ? (
                 <div className="space-y-6">
-                  {mediaUrl && (
-                    <ResultCanvas
-                      mediaUrl={mediaUrl}
-                      result={activeResult}
-                      mediaType="IMAGE"
-                    />
-                  )}
                   <MetricsOverview
                     sessionId={activeSession.id}
                     result={activeResult}
                   />
                 </div>
-              ) : (
+              ) : !mediaUrl && (
                 <div className="p-12 border border-dashed border-slate-800 rounded-2xl flex flex-col items-center justify-center text-center space-y-3">
                   <Activity className="w-10 h-10 text-slate-600" />
                   <div className="text-sm font-medium text-slate-300">

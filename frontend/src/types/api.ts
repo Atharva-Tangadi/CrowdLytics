@@ -49,6 +49,42 @@ export interface AnalysisJob {
   completed_at: string | null;
 }
 
+export interface FrameGroupAnnotation {
+  group_id: number;
+  cluster_id: number;
+  member_count: number;
+  centroid: [number, number];
+  bounding_box: [number, number, number, number];
+  convex_hull: [number, number][];
+  mean_nn_distance: number;
+  density_per_kpx: number;
+  motion_angle_deg: number | null;
+  motion_speed: number;
+  direction_label: string;
+  motion_confidence: number;
+  formation_state: string;
+}
+
+export interface FrameAnnotation {
+  timestamp: number;
+  frame_index: number;
+  crowd_count: number;
+  confidence: number;
+  groups: FrameGroupAnnotation[];
+}
+
+export interface AnalysisChunk {
+  id: string;
+  job_id: string;
+  chunk_index: number;
+  start_timestamp: number;
+  end_timestamp: number;
+  frame_count: number;
+  status: string;
+  frame_data_json: string;
+  created_at: string;
+}
+
 export interface CrowdGroupSummary {
   id: string;
   cluster_id: number;

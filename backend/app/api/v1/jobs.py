@@ -8,9 +8,9 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session, joinedload
 
 from app.db.session import get_db
-from app.models.entities import User, AnalysisSession, MediaAsset, AnalysisJob, CrowdAnalysisResult
+from app.models.entities import User, AnalysisSession, MediaAsset, AnalysisJob, AnalysisChunk, CrowdAnalysisResult
 from app.auth.deps import get_current_user
-from app.schemas.api import AnalysisConfigRequest, JobResponse, AnalysisResultResponse
+from app.schemas.api import AnalysisConfigRequest, JobResponse, AnalysisChunkResponse, AnalysisResultResponse
 from app.workers.analysis_worker import execute_analysis_job
 
 router = APIRouter(tags=["Analysis"])
@@ -84,6 +84,28 @@ def get_job_status(
     if not job:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found.")
     return job
+
+
+@router.get("/jobs/{job_id}/chunks", response_model=list[AnalysisChunkResponse])
+def get_job_chunks(
+    job_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Retrieves all completed analysis chunks for progressive video playback."""
+    job = db.query(AnalysisJob).join(AnalysisSession).filter(
+        AnalysisJob.id == job_id,
+        AnalysisSession.user_id == current_user.id
+    ).first()
+    if not job:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found.")
+
+    chunks = db.query(AnalysisChunk).filter(
+        AnalysisChunk.job_id == job.id,
+        AnalysisChunk.status == "COMPLETED"
+    ).order_by(AnalysisChunk.chunk_index.asc()).all()
+
+    return chunks
 
 
 @router.post("/jobs/{job_id}/cancel", response_model=JobResponse)

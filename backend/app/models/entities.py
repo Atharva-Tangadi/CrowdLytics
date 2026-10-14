@@ -80,6 +80,23 @@ class AnalysisJob(Base):
     session = relationship("AnalysisSession", back_populates="jobs")
     media_asset = relationship("MediaAsset", back_populates="jobs")
     result = relationship("CrowdAnalysisResult", back_populates="job", uselist=False, cascade="all, delete-orphan")
+    chunks = relationship("AnalysisChunk", back_populates="job", cascade="all, delete-orphan", order_by="AnalysisChunk.chunk_index")
+
+
+class AnalysisChunk(Base):
+    __tablename__ = "analysis_chunks"
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    job_id = Column(String(36), ForeignKey("analysis_jobs.id", ondelete="CASCADE"), nullable=False, index=True)
+    chunk_index = Column(Integer, nullable=False, index=True)
+    start_timestamp = Column(Float, nullable=False)
+    end_timestamp = Column(Float, nullable=False)
+    frame_count = Column(Integer, nullable=False, default=0)
+    status = Column(String(20), default="COMPLETED", nullable=False)
+    frame_data_json = Column(Text, nullable=False)  # JSON-encoded array of per-frame analysis
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    job = relationship("AnalysisJob", back_populates="chunks")
 
 
 class CrowdAnalysisResult(Base):

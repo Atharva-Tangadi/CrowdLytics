@@ -89,6 +89,20 @@ class JobResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class AnalysisChunkResponse(BaseModel):
+    id: str
+    job_id: str
+    chunk_index: int
+    start_timestamp: float
+    end_timestamp: float
+    frame_count: int
+    status: str
+    frame_data_json: str
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 # --- Results Schemas ---
 class GroupSummaryResponse(BaseModel):
     id: str

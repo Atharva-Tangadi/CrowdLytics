@@ -3,6 +3,7 @@ from app.models.entities import (
     AnalysisSession,
     MediaAsset,
     AnalysisJob,
+    AnalysisChunk,
     CrowdAnalysisResult,
     CrowdGroupSummary,
 )
@@ -12,6 +13,7 @@ __all__ = [
     "AnalysisSession",
     "MediaAsset",
     "AnalysisJob",
+    "AnalysisChunk",
     "CrowdAnalysisResult",
     "CrowdGroupSummary",
 ]

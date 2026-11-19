@@ -5,24 +5,34 @@ import { AnalysisSession, MediaAsset, AnalysisJob } from '../../types/api';
 
 interface NewAnalysisModalProps {
   session: AnalysisSession;
+  initialMedia?: MediaAsset | null;
   onJobStarted: (job: AnalysisJob) => void;
   onClose: () => void;
 }
 
 export const NewAnalysisModal: React.FC<NewAnalysisModalProps> = ({
   session,
+  initialMedia,
   onJobStarted,
   onClose,
 }) => {
   const [, setFile] = useState<File | null>(null);
-  const [mediaAsset, setMediaAsset] = useState<MediaAsset | null>(null);
+  const [mediaAsset, setMediaAsset] = useState<MediaAsset | null>(initialMedia || null);
   const [uploading, setUploading] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // Analytical Parameters
-  const [confThresh, setConfThresh] = useState(0.3);
+  const [detector, setDetector] = useState<'person' | 'blob'>('person');
+  const [grouping, setGrouping] = useState<'density' | 'hac'>('density');
+  const [confThresh, setConfThresh] = useState(0.25);
   const [distThresh, setDistThresh] = useState(50.0);
+  const [cameraMode, setCameraMode] = useState<'auto' | 'static'>('static');
+  const [minIncrease, setMinIncrease] = useState(15);
+  const [minPercent, setMinPercent] = useState(50);
+  const [persistence, setPersistence] = useState(1);
+  const [windowSeconds, setWindowSeconds] = useState(10);
+  const [eventsEnabled, setEventsEnabled] = useState(true);
   const [linkage, setLinkage] = useState<'ward' | 'complete' | 'average'>('ward');
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -49,10 +59,15 @@ export const NewAnalysisModal: React.FC<NewAnalysisModalProps> = ({
     try {
       const job = await api.startAnalysis(session.id, {
         media_asset_id: mediaAsset.id,
+        detector_backend: detector,
+        clustering_method: grouping,
         confidence_threshold: confThresh,
         distance_threshold: distThresh,
         linkage_method: linkage,
         sample_interval_frames: 5,
+        camera_mode: cameraMode,
+        crowd_increase: { enabled: eventsEnabled, min_absolute: minIncrease, min_percent: minPercent,
+          persistence_seconds: persistence, window_seconds: windowSeconds },
       });
       onJobStarted(job);
     } catch (err: any) {
@@ -63,7 +78,7 @@ export const NewAnalysisModal: React.FC<NewAnalysisModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-      <div className="w-full max-w-xl bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-2xl space-y-6">
+      <div className="w-full max-w-xl max-h-[90vh] overflow-y-auto bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-2xl space-y-6">
         <div className="flex items-center justify-between border-b border-slate-800 pb-4">
           <div>
             <h2 className="text-lg font-bold text-white">Start New Crowd Analysis</h2>
@@ -136,6 +151,13 @@ export const NewAnalysisModal: React.FC<NewAnalysisModalProps> = ({
 
         {/* Parameter Configuration */}
         <div className="space-y-4 pt-2 border-t border-slate-800">
+          <label className="block text-xs">Detector <select aria-label="Detector" className="bg-slate-800 p-2 ml-2" value={detector} onChange={e => setDetector(e.target.value as 'person'|'blob')}>
+            <option value="person">Overhead person model (local)</option><option value="blob">Synthetic blob demo only</option>
+          </select></label>
+          <label className="block text-xs">Grouping <select aria-label="Grouping" className="bg-slate-800 p-2 ml-2" value={grouping} onChange={e => setGrouping(e.target.value as 'density'|'hac')}>
+            <option value="density">Spatial neighborhoods (persistent members)</option><option value="hac">Hierarchical clustering (HAC)</option>
+          </select></label>
+          <p className="text-xs text-slate-400">The learned model estimates visible people. A 90% threshold discards most difficult detections; start at 25%. Reanalysis replaces the displayed run while retaining previous data.</p>
           <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-slate-400">
             <Sliders className="w-4 h-4 text-emerald-400" /> Analysis Parameters
           </div>
@@ -143,10 +165,11 @@ export const NewAnalysisModal: React.FC<NewAnalysisModalProps> = ({
           <div className="grid grid-cols-3 gap-3">
             <div>
               <label className="block text-xs font-medium text-slate-300 mb-1">
-                Confidence: {(confThresh * 100).toFixed(0)}%
+                Minimum score: {(confThresh * 100).toFixed(0)}%
               </label>
               <input
                 type="range"
+                aria-label="Minimum detection score"
                 min="0.1"
                 max="0.9"
                 step="0.05"
@@ -155,7 +178,7 @@ export const NewAnalysisModal: React.FC<NewAnalysisModalProps> = ({
                 className="w-full accent-emerald-500"
               />
               <span className="text-[10px] text-slate-500">
-                Minimum detector confidence
+                Filter only; this is not model accuracy
               </span>
             </div>
 
@@ -182,6 +205,7 @@ export const NewAnalysisModal: React.FC<NewAnalysisModalProps> = ({
                 Linkage Criterion
               </label>
               <select
+                disabled={grouping !== 'hac'}
                 value={linkage}
                 onChange={(e) => setLinkage(e.target.value as any)}
                 className="w-full px-3 py-1.5 bg-slate-800 border border-slate-700 rounded-lg text-xs text-white focus:outline-none focus:border-emerald-500"
@@ -191,12 +215,32 @@ export const NewAnalysisModal: React.FC<NewAnalysisModalProps> = ({
                 <option value="average">Average Linkage</option>
               </select>
               <span className="text-[10px] text-slate-500">
-                Hierarchical clustering criterion
+                Used only in hierarchical grouping mode
               </span>
             </div>
           </div>
+          {detector === 'person' && confThresh > .6 && <div role="alert" className="p-3 rounded bg-amber-500/10 text-amber-200 text-xs space-y-2">
+            <p>A {(confThresh*100).toFixed(0)}% minimum score can remove every detection. Increasing this value does not improve the model's accuracy.</p>
+            <button className="underline" onClick={() => setConfThresh(.25)}>Use recommended 25% minimum score</button>
+          </div>}
         </div>
 
+        {mediaAsset?.media_type === 'VIDEO' && <fieldset className="space-y-3 text-xs border-t border-slate-700 pt-3">
+          <legend>Video motion and crowd increase</legend>
+          <label className="block">Camera mode <select aria-label="Camera mode" value={cameraMode}
+            onChange={e => setCameraMode(e.target.value as 'auto' | 'static')} className="bg-slate-800 ml-2 p-2">
+            <option value="auto">Auto (validate and compensate drift)</option>
+            <option value="static">Static drone (fixed monitored scene)</option>
+          </select></label>
+          <label className="block"><input type="checkbox" checked={eventsEnabled} onChange={e => setEventsEnabled(e.target.checked)} /> Detect sudden crowd increases</label>
+          <div className="grid grid-cols-2 gap-3">
+            <label>Minimum increase (people)<input aria-label="Minimum increase" className="block bg-slate-800 w-full p-2" type="number" min="1" max="10000" value={minIncrease} onChange={e => setMinIncrease(Number(e.target.value))} /></label>
+            <label>Minimum increase (%)<input aria-label="Minimum percentage" className="block bg-slate-800 w-full p-2" type="number" min="0" max="10000" value={minPercent} onChange={e => setMinPercent(Number(e.target.value))} /></label>
+            <label>Persistence (seconds)<input aria-label="Persistence" className="block bg-slate-800 w-full p-2" type="number" min="0" max="30" step="0.5" value={persistence} onChange={e => setPersistence(Number(e.target.value))} /></label>
+            <label>Baseline window (seconds)<input aria-label="Baseline window" className="block bg-slate-800 w-full p-2" type="number" min="4" max="120" value={windowSeconds} onChange={e => setWindowSeconds(Number(e.target.value))} /></label>
+          </div>
+          <p className="text-slate-400">Speed is in px/s. Directions are image-relative. Count increases are not proof of an organized flash mob. Baseline needs at least 3 seconds of valid history.</p>
+        </fieldset>}
         {/* Action Controls */}
         <div className="flex justify-end gap-3 pt-4 border-t border-slate-800">
           <button

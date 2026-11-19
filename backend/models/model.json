@@ -1,0 +1,8 @@
+{
+  "name": "YOLO11s overhead person",
+  "source": "https://huggingface.co/chanubc/overhead-person-yolo11/resolve/8dbb94a4948e526e111dbb8b1f2d0cc8d941ed22/best.onnx",
+  "sha256": "9b310c8d77fb9383dcd6ae342f319cc6941242937909fc82d42fc50d1125886e",
+  "bytes": 37927774,
+  "model_card_license": "CC-BY-4.0",
+  "attribution": "chanubc/overhead-person-yolo11; Ultralytics YOLO11 base"
+}

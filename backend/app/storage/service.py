@@ -1,6 +1,7 @@
 """Local private filesystem storage adapter."""
 import os
 import uuid
+import math
 from pathlib import Path
 from typing import Tuple
 import cv2
@@ -28,6 +29,12 @@ class StorageService:
         Returns: (storage_path, media_type, file_size, metadata)
         """
         ext = Path(original_filename).suffix.lower()
+        allowed_images = {".jpg", ".jpeg", ".png"}
+        if ext not in allowed_images | {".mp4", ".mov", ".avi"}:
+            raise ValueError(f"Unsupported file extension: {ext}")
+        limit = settings.MAX_IMAGE_SIZE_MB if ext in allowed_images else settings.MAX_VIDEO_SIZE_MB
+        if len(file_bytes) > limit * 1024 * 1024:
+            raise ValueError(f"Media exceeds {limit} MB limit.")
         file_uuid = str(uuid.uuid4())
         safe_filename = f"{file_uuid}{ext}"
         target_path = self.uploads_dir / safe_filename
@@ -60,6 +67,12 @@ class StorageService:
             frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
             duration = float(frame_count / fps) if fps > 0 else 0.0
             cap.release()
+            if not math.isfinite(fps) or fps <= 0 or frame_count <= 0 or w <= 0 or h <= 0:
+                target_path.unlink(missing_ok=True)
+                raise ValueError("Invalid video dimensions, frame rate or duration.")
+            if duration > settings.MAX_VIDEO_DURATION_SECONDS:
+                target_path.unlink(missing_ok=True)
+                raise ValueError("Video exceeds maximum duration.")
             metadata["width"] = w
             metadata["height"] = h
             metadata["fps"] = fps
@@ -82,7 +95,7 @@ class StorageService:
             valid_roots.append(legacy_storage.resolve())
 
         is_valid = any(
-            str(resolved).startswith(str(r)) for r in valid_roots
+            resolved.is_relative_to(r) for r in valid_roots
         )
         if not is_valid:
             raise PermissionError("Access outside storage root is forbidden.")

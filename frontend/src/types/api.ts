@@ -1,17 +1,3 @@
-export interface User {
-  id: string;
-  email: string;
-  role: string;
-  created_at: string;
-}
-
-export interface AuthResponse {
-  access_token: string;
-  token_type: string;
-  user_id: string;
-  email: string;
-}
-
 export interface AnalysisSession {
   id: string;
   user_id: string;
@@ -49,23 +35,53 @@ export interface AnalysisJob {
   completed_at: string | null;
 }
 
+export interface AnalysisRun extends AnalysisJob {
+  confidence_threshold: number;
+  peak_count: number | null;
+  result_available: boolean;
+}
+
 export interface FrameGroupAnnotation {
   group_id: number;
   cluster_id: number;
   member_count: number;
   centroid: [number, number];
   bounding_box: [number, number, number, number];
-  convex_hull: [number, number][];
+  convex_hull: [number, number][] | null;
   mean_nn_distance: number;
   density_per_kpx: number;
   motion_angle_deg: number | null;
-  motion_speed: number;
+  motion_speed: number | null;
+  speed_unit?: string;
+  observation_status?: string;
+  track_ids?: number[];
+  motion_status?: string;
   direction_label: string;
   motion_confidence: number;
   formation_state: string;
 }
 
+export interface CrowdEvent {
+  state: string;
+  timestamp?: number;
+  baseline_count?: number;
+  current_count?: number;
+  absolute_increase?: number;
+  percentage_increase?: number | null;
+  reason?: string;
+}
+
 export interface FrameAnnotation {
+  annotation_version?: number;
+  valid_until?: number;
+  crowd_event?: CrowdEvent;
+  camera_status?: string;
+  tracked_count?: number;
+  cluster_count?: number;
+  mean_closeness_px?: number;
+  mean_density_per_kpx?: number;
+  detector?: string;
+  detection_diagnostics?: {requested_threshold?: number; max_detection_score?: number; candidates_at_recommended_threshold?: number | null};
   timestamp: number;
   frame_index: number;
   crowd_count: number;
@@ -101,6 +117,7 @@ export interface CrowdGroupSummary {
 }
 
 export interface AnalysisResult {
+  media_asset_id?: string;
   id: string;
   job_id: string;
   total_crowd_count: number;
@@ -117,8 +134,24 @@ export interface AnalysisResult {
 
 export interface AnalysisConfig {
   media_asset_id: string;
+  detector_backend?: 'auto' | 'person' | 'blob';
+  clustering_method?: 'hac' | 'density';
   confidence_threshold: number;
   distance_threshold: number;
   linkage_method: 'ward' | 'complete' | 'average';
   sample_interval_frames?: number;
+  camera_mode?: 'auto' | 'static';
+  motion_min_displacement_px?: number;
+  motion_smoothing?: number;
+  chunk_duration_sec?: number;
+  crowd_increase?: {
+    enabled?: boolean;
+    window_seconds?: number;
+    min_history_seconds?: number;
+    min_samples?: number;
+    min_absolute?: number;
+    min_percent?: number;
+    persistence_seconds?: number;
+    cooldown_seconds?: number;
+  };
 }

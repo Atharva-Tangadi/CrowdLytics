@@ -1,17 +1,19 @@
-import { render, screen } from '@testing-library/react';
-import { describe, it, expect } from 'vitest';
+import { render, screen, waitFor, cleanup } from '@testing-library/react';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import App from '../src/App';
-import { AuthProvider } from '../src/features/auth/AuthContext';
 
-describe('App & Authentication Flow', () => {
-  it('renders authentication screen when unauthenticated', () => {
-    render(
-      <AuthProvider>
-        <App />
-      </AuthProvider>
-    );
-    expect(screen.getAllByText(/Aerial Crowd Intelligence/i).length).toBeGreaterThan(0);
-    expect(screen.getByText(/Authenticate/i)).toBeInTheDocument();
-    expect(screen.getByPlaceholderText(/analyst@domain.com/i)).toBeInTheDocument();
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+
+describe('Local workspace', () => {
+  it('opens the dashboard directly and requests sessions without credentials', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ok:true,status:200,json:async () => []});
+    vi.stubGlobal('fetch',fetchMock);
+    render(<App />);
+    expect(screen.getByText('Local workspace')).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('New session title...')).toBeInTheDocument();
+    expect(screen.queryByText('Authenticate')).not.toBeInTheDocument();
+    expect(screen.queryByTitle('Sign out')).not.toBeInTheDocument();
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/v1/sessions', {headers:{}}));
+    expect(fetchMock.mock.calls.every(([url]) => !String(url).includes('/auth/'))).toBe(true);
   });
 });

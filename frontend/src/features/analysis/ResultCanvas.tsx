@@ -1,9 +1,11 @@
 import React, { useRef, useEffect, useState, useMemo, useCallback } from 'react';
-import { AnalysisResult, AnalysisChunk, FrameAnnotation, FrameGroupAnnotation } from '../../types/api';
-import { Eye, EyeOff, Sliders, Compass, Loader2 } from 'lucide-react';
+import { AnalysisResult, AnalysisChunk, FrameAnnotation } from '../../types/api';
+import { details, matchingFrame } from './annotations';
+import { VideoAnalytics } from './VideoAnalytics';
 
 interface ResultCanvasProps {
   mediaUrl: string;
+  jobId?: string;
   result?: AnalysisResult | null;
   chunks?: AnalysisChunk[];
   mediaType: 'IMAGE' | 'VIDEO';
@@ -12,395 +14,173 @@ interface ResultCanvasProps {
   showCentroids?: boolean;
   showBoxes?: boolean;
 }
+const COLORS = ['#ef4444','#3b82f6','#10b981','#f59e0b','#a855f7','#ec4899','#06b6d4','#eab308'];
 
-const CLUSTER_HEX = [
-  '#ef4444', // Red
-  '#3b82f6', // Blue
-  '#10b981', // Emerald
-  '#f59e0b', // Amber
-  '#a855f7', // Purple
-  '#ec4899', // Pink
-  '#06b6d4', // Cyan
-  '#eab308', // Yellow
-];
-
-export const ResultCanvas: React.FC<ResultCanvasProps> = ({
-  mediaUrl,
-  result,
-  chunks = [],
-  mediaType,
-  isAnalyzing = false,
-  showHulls = true,
-  showCentroids = true,
-  showBoxes = true,
-}) => {
-  const containerRef = useRef<HTMLDivElement | null>(null);
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const videoRef = useRef<HTMLVideoElement | null>(null);
-
-  // Playback & Overlay states
-  const [showOverlays, setShowOverlays] = useState<boolean>(true);
-  const [detailedMode, setDetailedMode] = useState<boolean>(false);
-  const [currentTime, setCurrentTime] = useState<number>(0);
-  const [duration, setDuration] = useState<number>(0);
-  const [currentFrameData, setCurrentFrameData] = useState<FrameAnnotation | null>(null);
-
-  // Parse all frame annotations from completed chunks sorted by timestamp
-  const allFrames: FrameAnnotation[] = useMemo(() => {
-    if (!chunks || chunks.length === 0) return [];
-    const frames: FrameAnnotation[] = [];
+export const ResultCanvas: React.FC<ResultCanvasProps> = ({ mediaUrl, jobId, result, chunks = [], mediaType,
+  isAnalyzing = false, showHulls = true, showCentroids = true, showBoxes = true }) => {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const waitingCoverage = useRef<number | null>(null);
+  const [buffering,setBuffering] = useState(false);
+  const [visible, setVisible] = useState(true);
+  const [hulls, setHulls] = useState(showHulls);
+  const [centroids, setCentroids] = useState(showCentroids);
+  const [arrows, setArrows] = useState(true);
+  const [speeds, setSpeeds] = useState(true);
+  const [events, setEvents] = useState(true);
+  const [detailed, setDetailed] = useState(false);
+  const [arrowLength, setArrowLength] = useState(36);
+  const [time, setTime] = useState(0);
+  const [frameData, setFrameData] = useState<FrameAnnotation | null>(null);
+  const summary = useMemo(() => details(result), [result]);
+  const frames = useMemo(() => {
+    const values: FrameAnnotation[] = [];
     for (const chunk of chunks) {
-      try {
-        const parsed: FrameAnnotation[] = JSON.parse(chunk.frame_data_json);
-        frames.push(...parsed);
-      } catch {
-        // Skip malformed chunk json
-      }
+      try { values.push(...JSON.parse(chunk.frame_data_json)); } catch { /* Ignore malformed legacy chunks. */ }
     }
-    return frames.sort((a, b) => a.timestamp - b.timestamp);
+    return values.sort((a,b) => a.timestamp - b.timestamp);
   }, [chunks]);
 
-  const latestAnalyzedTimestamp = useMemo(() => {
-    if (allFrames.length === 0) return 0;
-    return allFrames[allFrames.length - 1].timestamp;
-  }, [allFrames]);
-
-  // Find frame closest to target timestamp within tolerance (0.45s)
-  const findMatchingFrame = useCallback(
-    (time: number): FrameAnnotation | null => {
-      if (allFrames.length === 0) return null;
-      let closest: FrameAnnotation | null = null;
-      let minDiff = 0.45;
-
-      for (const f of allFrames) {
-        const diff = Math.abs(f.timestamp - time);
-        if (diff < minDiff) {
-          minDiff = diff;
-          closest = f;
-        }
-      }
-      return closest;
-    },
-    [allFrames]
-  );
-
-  // --- Draw Image Analysis Overlays ---
-  const renderImageOverlay = useCallback(() => {
-    const canvas = canvasRef.current;
-    if (!canvas || !result) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    const img = new Image();
-    img.crossOrigin = 'anonymous';
-    img.src = mediaUrl;
-    img.onload = () => {
-      canvas.width = img.width;
-      canvas.height = img.height;
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      ctx.drawImage(img, 0, 0);
-
-      if (!showOverlays) return;
-
-      result.groups.forEach((group, idx) => {
-        const color = CLUSTER_HEX[idx % CLUSTER_HEX.length];
-
-        // 1. Bounding Box
-        if (showBoxes && group.bounding_box_json) {
-          try {
-            const bbox = JSON.parse(group.bounding_box_json);
-            const [minX, minY, maxX, maxY] = bbox;
-            ctx.strokeStyle = color;
-            ctx.lineWidth = 2;
-            ctx.strokeRect(minX, minY, maxX - minX, maxY - minY);
-
-            ctx.fillStyle = color;
-            ctx.font = 'bold 12px Inter, sans-serif';
-            ctx.fillText(
-              `Group ${group.cluster_id} (n=${group.member_count})`,
-              minX,
-              Math.max(minY - 6, 14)
-            );
-          } catch {}
-        }
-
-        // 2. Centroid
-        if (showCentroids) {
-          ctx.fillStyle = color;
-          ctx.beginPath();
-          ctx.arc(group.centroid_x, group.centroid_y, 5, 0, Math.PI * 2);
-          ctx.fill();
-          ctx.strokeStyle = '#ffffff';
-          ctx.lineWidth = 1.5;
-          ctx.stroke();
-        }
-      });
-    };
-  }, [mediaUrl, result, showOverlays, showBoxes, showCentroids]);
-
-  // --- Draw Video Analysis Overlays ---
-  const renderVideoOverlay = useCallback(() => {
+  const draw = useCallback((image?: HTMLImageElement) => {
     const canvas = canvasRef.current;
     const video = videoRef.current;
-    if (!canvas || !video) return;
+    if (!canvas) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
-
-    // Synchronize canvas resolution with video intrinsic dimensions
-    const vw = video.videoWidth || 640;
-    const vh = video.videoHeight || 360;
-    if (canvas.width !== vw || canvas.height !== vh) {
-      canvas.width = vw;
-      canvas.height = vh;
+    const width=image?.naturalWidth || video?.videoWidth || 640;
+    const height=image?.naturalHeight || video?.videoHeight || 360;
+    if (canvas.width!==width) canvas.width=width;
+    if (canvas.height!==height) canvas.height=height;
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    if (image) ctx.drawImage(image,0,0);
+    let playbackTime=video?.currentTime || 0;
+    if (video?.ended) playbackTime=Math.max(0,playbackTime-.0001);
+    const current = mediaType === 'VIDEO' ? matchingFrame(frames, playbackTime) : null;
+    if (video && isAnalyzing && !current && !video.paused) {
+      video.pause();
+      waitingCoverage.current=frames[frames.length-1]?.valid_until || 0;
+      setBuffering(true);
     }
-
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-    if (!showOverlays) {
-      setCurrentFrameData(null);
-      return;
+    if (mediaType === 'VIDEO') {
+      setFrameData(current);
+      setTime(video?.currentTime || 0);
     }
-
-    const t = video.currentTime;
-    const frame = findMatchingFrame(t);
-    setCurrentFrameData(frame);
-
-    if (!frame || !frame.groups || frame.groups.length === 0) {
-      return;
-    }
-
-    // Draw each group in the active frame
-    frame.groups.forEach((group: FrameGroupAnnotation) => {
-      const color = CLUSTER_HEX[(group.group_id - 1) % CLUSTER_HEX.length];
-
-      // 1. Convex Hull Polygon Boundary
-      if (showHulls && group.convex_hull && group.convex_hull.length >= 3) {
+    if (!visible) return;
+    const groups = mediaType === 'VIDEO' ? current?.groups || [] : (result?.groups || []).map(g => ({
+      ...g, group_id: g.cluster_id, centroid: [g.centroid_x,g.centroid_y],
+      bounding_box: JSON.parse(g.bounding_box_json),
+      convex_hull: summary.group_annotations?.find(a => a.cluster_id === g.cluster_id)?.convex_hull,
+      direction_label: 'Unavailable for still image', mean_nn_distance: g.mean_nn_distance,
+    }));
+    groups.forEach((g) => {
+      const color = COLORS[(g.group_id - 1) % COLORS.length];
+      const [cx,cy] = g.centroid;
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 2;
+      if (hulls && g.convex_hull && g.convex_hull.length >= 3) {
         ctx.beginPath();
-        const [firstX, firstY] = group.convex_hull[0];
-        ctx.moveTo(firstX, firstY);
-        for (let i = 1; i < group.convex_hull.length; i++) {
-          ctx.lineTo(group.convex_hull[i][0], group.convex_hull[i][1]);
-        }
-        ctx.closePath();
-
-        // Semi-transparent polygon fill
-        ctx.fillStyle = `${color}33`; // 20% alpha
-        ctx.fill();
-        ctx.strokeStyle = color;
-        ctx.lineWidth = 2.5;
-        ctx.stroke();
+        g.convex_hull.forEach(([x,y],i) => i ? ctx.lineTo(x,y) : ctx.moveTo(x,y));
+        ctx.closePath(); ctx.fillStyle = color + '33'; ctx.fill(); ctx.stroke();
       }
-
-      // 2. Centroid Marker
-      if (showCentroids) {
-        const [cx, cy] = group.centroid;
-        ctx.beginPath();
-        ctx.arc(cx, cy, 5, 0, Math.PI * 2);
-        ctx.fillStyle = color;
-        ctx.fill();
-        ctx.strokeStyle = '#ffffff';
-        ctx.lineWidth = 2;
-        ctx.stroke();
+      if (showBoxes && (mediaType === 'IMAGE' || !g.convex_hull || g.convex_hull.length < 3)) {
+        const [x1,y1,x2,y2] = g.bounding_box;
+        ctx.strokeStyle=color; ctx.strokeRect(x1-4,y1-4,Math.max(x2-x1,4)+8,Math.max(y2-y1,4)+8);
       }
-
-      // 3. Collective Movement Direction Arrow
-      if (
-        group.motion_angle_deg !== null &&
-        group.direction_label !== 'STATIONARY' &&
-        group.motion_speed >= 0.5
-      ) {
-        const [cx, cy] = group.centroid;
-        const rad = (group.motion_angle_deg * Math.PI) / 180.0;
-        const arrowLen = Math.min(Math.max(group.motion_speed * 8.0, 24), 60);
-        const endX = cx + Math.cos(rad) * arrowLen;
-        const endY = cy + Math.sin(rad) * arrowLen;
-
-        // Shaft
-        ctx.beginPath();
-        ctx.moveTo(cx, cy);
-        ctx.lineTo(endX, endY);
-        ctx.strokeStyle = '#facc15'; // Bright yellow arrow
-        ctx.lineWidth = 3;
-        ctx.stroke();
-
-        // Arrowhead
-        const headLen = 9;
-        const angle1 = rad - Math.PI / 6;
-        const angle2 = rad + Math.PI / 6;
-        ctx.beginPath();
-        ctx.moveTo(endX, endY);
-        ctx.lineTo(endX - headLen * Math.cos(angle1), endY - headLen * Math.sin(angle1));
-        ctx.lineTo(endX - headLen * Math.cos(angle2), endY - headLen * Math.sin(angle2));
-        ctx.closePath();
-        ctx.fillStyle = '#facc15';
-        ctx.fill();
+      if (centroids) {
+        ctx.beginPath(); ctx.arc(cx,cy,5,0,Math.PI*2); ctx.fillStyle=color; ctx.fill();
+        ctx.strokeStyle='#fff'; ctx.stroke();
       }
-
-      // 4. Stable Group Badge & Direction Label
-      const [minX, minY] = group.bounding_box;
-      const labelX = Math.max(minX, 10);
-      const labelY = Math.max(minY - 10, 16);
-
-      // Badge background pill
-      const dirText =
-        group.direction_label !== 'STATIONARY'
-          ? ` ${group.direction_label}`
-          : '';
-      const mainLabel = `G${group.group_id} (n=${group.member_count})${dirText}`;
-
-      ctx.font = 'bold 12px Inter, sans-serif';
-      const textWidth = ctx.measureText(mainLabel).width;
-      ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
-      ctx.fillRect(labelX - 4, labelY - 14, textWidth + 8, 18);
-
-      ctx.fillStyle = color;
-      ctx.fillText(mainLabel, labelX, labelY);
-
-      // Detailed Metrics Badge
-      if (detailedMode) {
-        const detailText = `${group.density_per_kpx} /kpx² | NN:${group.mean_nn_distance}px | ${group.formation_state}`;
-        ctx.font = '10px Inter, sans-serif';
-        const dWidth = ctx.measureText(detailText).width;
-        ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
-        ctx.fillRect(labelX - 4, labelY + 6, dWidth + 8, 15);
-        ctx.fillStyle = '#94a3b8';
-        ctx.fillText(detailText, labelX, labelY + 18);
+      if (mediaType === 'VIDEO' && arrows && g.motion_angle_deg != null && g.motion_speed != null && g.motion_speed > 0) {
+        // Version 1 used clockwise angles. Version 2 uses mathematical image-relative angles.
+        const rad = g.motion_angle_deg * Math.PI / 180 * ((current?.annotation_version || 1) >= 2 ? -1 : 1);
+        const ex = cx + Math.cos(rad)*arrowLength, ey = cy + Math.sin(rad)*arrowLength;
+        ctx.strokeStyle='#facc15'; ctx.beginPath(); ctx.moveTo(cx,cy); ctx.lineTo(ex,ey); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(ex,ey);
+        ctx.lineTo(ex-9*Math.cos(rad-.5),ey-9*Math.sin(rad-.5));
+        ctx.lineTo(ex-9*Math.cos(rad+.5),ey-9*Math.sin(rad+.5));
+        ctx.closePath(); ctx.fillStyle='#facc15'; ctx.fill();
+      }
+      const speed = mediaType === 'VIDEO' && speeds ? (g.motion_speed == null ? ' | '+g.direction_label :
+        ' | '+g.motion_speed.toFixed(1)+((current?.annotation_version || 1) >= 2 ? ' px/s' : ' px/sample (legacy)')) : '';
+      const direction = mediaType === 'VIDEO' && g.motion_angle_deg != null ? ' '+g.direction_label : '';
+      const label = `G${g.group_id} (n=${g.member_count})${direction}${speed}`;
+      const x = Math.max(6,Math.min(g.bounding_box[0],canvas.width-30));
+      const y = Math.max(20,g.bounding_box[1]-12);
+      ctx.font='bold 12px sans-serif'; ctx.fillStyle='#0f172add';
+      ctx.fillRect(x-3,y-14,ctx.measureText(label).width+6,19);
+      ctx.fillStyle=color; ctx.fillText(label,x,y);
+      if (detailed) {
+        ctx.fillStyle='#fff'; ctx.fillText(`NN: ${g.mean_nn_distance}px | ${g.formation_state || 'Spatial only'}`,x,y+18);
       }
     });
-  }, [showOverlays, showHulls, showCentroids, detailedMode, findMatchingFrame]);
+  }, [mediaType,frames,result,summary,visible,hulls,centroids,arrows,speeds,detailed,arrowLength,showBoxes,isAnalyzing]);
 
-  // Initial draw / change triggers
   useEffect(() => {
+    let disposed = false;
     if (mediaType === 'IMAGE') {
-      renderImageOverlay();
-    } else {
-      renderVideoOverlay();
+      const image = new Image();
+      image.onload = () => { if (!disposed) draw(image); };
+      image.src = mediaUrl;
+      return () => { disposed = true; image.onload = null; };
     }
-  }, [mediaType, renderImageOverlay, renderVideoOverlay]);
+    draw();
+    // Draw at browser animation cadence so seeking/playback stays synchronized.
+    let request = 0;
+    const tick = () => { draw(); request = requestAnimationFrame(tick); };
+    request = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(request);
+  }, [draw,mediaType,mediaUrl]);
 
-  // Video event listeners for synchronized playback
-  const handleTimeUpdate = () => {
-    if (videoRef.current) {
-      setCurrentTime(videoRef.current.currentTime);
-      renderVideoOverlay();
+  useEffect(() => { setTime(0); setFrameData(null); waitingCoverage.current=null;setBuffering(false); }, [mediaUrl]);
+  useEffect(() => {
+    const video=videoRef.current;
+    const coverage=frames[frames.length-1]?.valid_until || 0;
+    if (video && waitingCoverage.current != null && coverage>waitingCoverage.current && matchingFrame(frames,video.currentTime)) {
+      waitingCoverage.current=null;setBuffering(false);video.play().catch(() => {});
     }
-  };
-
-  const handleLoadedMetadata = () => {
-    if (videoRef.current) {
-      setDuration(videoRef.current.duration || 0);
-      renderVideoOverlay();
-    }
-  };
-
-  const isBuffering =
-    mediaType === 'VIDEO' &&
-    currentTime > latestAnalyzedTimestamp + 0.5 &&
-    (isAnalyzing || latestAnalyzedTimestamp === 0);
-
-  return (
-    <div className="flex flex-col gap-3">
-      {/* Visual Composition Container */}
-      <div
-        ref={containerRef}
-        className="relative rounded-2xl overflow-hidden border border-slate-700/80 bg-slate-950 flex items-center justify-center min-h-[360px] shadow-2xl"
-      >
-        {mediaType === 'IMAGE' ? (
-          <canvas ref={canvasRef} className="max-w-full h-auto object-contain" />
-        ) : (
-          <div className="relative w-full h-full flex items-center justify-center">
-            <video
-              ref={videoRef}
-              src={mediaUrl}
-              controls
-              playsInline
-              onTimeUpdate={handleTimeUpdate}
-              onSeeked={handleTimeUpdate}
-              onLoadedMetadata={handleLoadedMetadata}
-              className="w-full max-h-[600px] object-contain"
-            />
-            {/* Synchronized Overlay Canvas */}
-            <canvas
-              ref={canvasRef}
-              className="pointer-events-none absolute inset-0 w-full h-full object-contain"
-            />
-
-            {/* Buffering / Unanalyzed Fallback Indicator */}
-            {isBuffering && (
-              <div className="absolute top-4 right-4 px-3 py-1.5 rounded-lg bg-amber-500/20 border border-amber-500/40 backdrop-blur-md text-amber-300 text-xs font-medium flex items-center gap-2 pointer-events-none shadow-lg">
-                <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                <span>Buffering analysis for this segment...</span>
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-
-      {/* Synchronized Video Controls & Overlay Toggles */}
-      <div className="flex flex-wrap items-center justify-between gap-3 p-3 bg-slate-800/80 rounded-xl border border-slate-700/70 text-xs">
-        <div className="flex items-center gap-2">
-          {/* Overlay Visibility Toggle */}
-          <button
-            type="button"
-            onClick={() => {
-              setShowOverlays(!showOverlays);
-              if (mediaType === 'VIDEO') renderVideoOverlay();
-            }}
-            className={`px-3 py-1.5 rounded-lg font-medium flex items-center gap-1.5 transition-colors cursor-pointer ${
-              showOverlays
-                ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 hover:bg-emerald-500/30'
-                : 'bg-slate-700 text-slate-400 hover:bg-slate-600'
-            }`}
-          >
-            {showOverlays ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
-            {showOverlays ? 'Overlays Visible' : 'Original Video (Clean)'}
-          </button>
-
-          {/* Detailed vs Clean Toggle */}
-          {mediaType === 'VIDEO' && showOverlays && (
-            <button
-              type="button"
-              onClick={() => {
-                setDetailedMode(!detailedMode);
-                renderVideoOverlay();
-              }}
-              className={`px-3 py-1.5 rounded-lg font-medium flex items-center gap-1.5 transition-colors cursor-pointer ${
-                detailedMode
-                  ? 'bg-purple-500/20 text-purple-300 border border-purple-500/40 hover:bg-purple-500/30'
-                  : 'bg-slate-700 text-slate-400 hover:bg-slate-600'
-              }`}
-            >
-              <Sliders className="w-3.5 h-3.5" />
-              {detailedMode ? 'Detailed Mode' : 'Clean Mode'}
-            </button>
-          )}
-        </div>
-
-        {/* Video Progressive Status Information */}
-        {mediaType === 'VIDEO' && (
-          <div className="flex items-center gap-4 text-slate-400">
-            {currentFrameData && currentFrameData.groups.length > 0 && (
-              <div className="flex items-center gap-1.5 text-emerald-400">
-                <Compass className="w-3.5 h-3.5" />
-                <span>
-                  Active Groups: {currentFrameData.groups.length} (n={currentFrameData.crowd_count})
-                </span>
-              </div>
-            )}
-            <div className="text-slate-300">
-              Time:{' '}
-              <span className="font-mono text-white">
-                {currentTime.toFixed(1)}s / {duration.toFixed(1)}s
-              </span>
-            </div>
-            {chunks.length > 0 && (
-              <div className="text-[11px] px-2 py-0.5 rounded bg-slate-900 border border-slate-700 text-slate-300">
-                Chunks Ready: {chunks.length} ({latestAnalyzedTimestamp.toFixed(1)}s analyzed)
-              </div>
-            )}
-          </div>
-        )}
-      </div>
+  }, [frames]);
+  useEffect(() => {
+    if (!isAnalyzing) { waitingCoverage.current=null;setBuffering(false); }
+  }, [isAnalyzing]);
+  const event = frameData?.crowd_event;
+  const noCoverage = mediaType === 'VIDEO' && !frameData;
+  return <div className="space-y-3">
+    {result && (summary.annotation_version || 1) < 3 && <p className="p-3 text-amber-300 bg-slate-800 rounded text-sm">
+      This is an older analysis. Use “Reanalyze this media with improved detector” to generate person tracks and the new analytics.
+    </p>}
+    {buffering && <p className="text-amber-300 text-sm">Playback paused while analysis catches up. It resumes when this segment is ready.</p>}
+    <div className="rounded-xl overflow-hidden border border-slate-700 bg-black">
+      {mediaType === 'IMAGE' ? <canvas ref={canvasRef} className="block max-w-full h-auto mx-auto" /> :
+        <div className="relative w-full">
+          <video key={mediaUrl} ref={videoRef} src={mediaUrl} controls playsInline
+            onTimeUpdate={() => draw()} onSeeked={() => draw()} onLoadedMetadata={() => draw()}
+            className="block w-full h-auto" />
+          <canvas ref={canvasRef} className="absolute inset-0 w-full h-full pointer-events-none" />
+        </div>}
     </div>
-  );
+    <div className="flex flex-wrap gap-3 p-3 bg-slate-800 rounded-lg text-xs">
+      {([['Overlays',visible,setVisible],['Convex hulls',hulls,setHulls],['Centroids',centroids,setCentroids],
+        ['Direction arrows',arrows,setArrows],['Speed labels',speeds,setSpeeds],['Crowd events',events,setEvents],
+        ['Detailed metrics',detailed,setDetailed]] as const).map(([label,value,setter]) =>
+        <label key={label} className="flex gap-1 items-center"><input type="checkbox" checked={value}
+          onChange={e => setter(e.target.checked)} />{label}</label>)}
+      {mediaType === 'VIDEO' && <label>Arrow length (display only): <input aria-label="Arrow length" type="range"
+        min="20" max="80" value={arrowLength} onChange={e => setArrowLength(Number(e.target.value))} /></label>}
+    </div>
+    {mediaType === 'VIDEO' && <VideoAnalytics frame={frameData} frames={frames} time={time} jobId={jobId}
+      seek={value => { if (videoRef.current) { videoRef.current.currentTime=value; draw(); } }} />}
+    {mediaType === 'IMAGE' ? <p className="text-xs text-slate-400">Spatial analysis only. Direction and speed unavailable.</p> :
+      <div className="text-xs text-slate-300 space-y-2">
+        <p>{time.toFixed(2)}s | Image-relative directions, not geographic headings. Speed: px/s. Arrows have a fixed display length.</p>
+        {noCoverage && <p className="text-amber-300">{isAnalyzing ? 'Buffering analysis for this segment' : 'No valid analysis for this timestamp'}</p>}
+        {frameData && <p>Groups: {frameData.groups.length} | Count: {frameData.crowd_count} | Camera: {frameData.camera_status || 'Legacy'}</p>}
+        {visible && events && event && <div role="status" className="p-3 rounded bg-slate-800">
+          <strong>{event.state === 'DETECTED' ? 'Sudden crowd increase detected' : event.state === 'CANDIDATE' ? 'Potential sudden crowd increase' : event.state}</strong>
+          {event.timestamp != null && <span> at {event.timestamp.toFixed(2)}s</span>}
+          {event.baseline_count != null && <p>Baseline {event.baseline_count}; current {event.current_count}; increase {event.absolute_increase}
+            {event.percentage_increase != null ? ` (${event.percentage_increase.toFixed(1)}%)` : ' (percentage unavailable for zero baseline)'}</p>}
+          <p>{event.reason}</p>
+        </div>}
+      </div>}
+  </div>;
 };

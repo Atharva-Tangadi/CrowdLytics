@@ -114,6 +114,10 @@ class CrowdAnalysisResult(Base):
     summary_data_json = Column(Text, nullable=True)  # Full aggregate metrics & details
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
+    @property
+    def media_asset_id(self):
+        return self.job.media_asset_id if self.job else None
+
     job = relationship("AnalysisJob", back_populates="result")
     groups = relationship("CrowdGroupSummary", back_populates="result", cascade="all, delete-orphan")
 

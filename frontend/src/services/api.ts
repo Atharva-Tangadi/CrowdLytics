@@ -1,9 +1,8 @@
 import {
-  AuthResponse,
-  User,
   AnalysisSession,
   MediaAsset,
   AnalysisJob,
+  AnalysisRun,
   AnalysisChunk,
   AnalysisResult,
   AnalysisConfig,
@@ -12,23 +11,14 @@ import {
 const API_BASE = '/api/v1';
 
 class ApiClient {
-  private getAuthHeader(): Record<string, string> {
-    const token = localStorage.getItem('token');
-    return token ? { Authorization: `Bearer ${token}` } : {};
-  }
-
   private async request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
     const url = `${API_BASE}${endpoint}`;
     const headers = {
-      ...this.getAuthHeader(),
       ...((options.headers as Record<string, string>) || {}),
     };
 
     const response = await fetch(url, { ...options, headers });
     if (!response.ok) {
-      if (response.status === 401) {
-        localStorage.removeItem('token');
-      }
       let errDetail = 'Request failed';
       try {
         const errorJson = await response.json();
@@ -45,33 +35,6 @@ class ApiClient {
     }
 
     return response.json();
-  }
-
-  // --- Auth ---
-  async login(email: string, password: string): Promise<AuthResponse> {
-    const res = await this.request<AuthResponse>('/auth/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password }),
-    });
-    localStorage.setItem('token', res.access_token);
-    return res;
-  }
-
-  async register(email: string, password: string): Promise<User> {
-    return this.request<User>('/auth/register', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password }),
-    });
-  }
-
-  async getProfile(): Promise<User> {
-    return this.request<User>('/auth/me');
-  }
-
-  logout(): void {
-    localStorage.removeItem('token');
   }
 
   // --- Sessions ---
@@ -114,10 +77,7 @@ class ApiClient {
   }
 
   async getMediaBlobUrl(mediaId: string): Promise<string> {
-    const token = localStorage.getItem('token');
-    const res = await fetch(`${API_BASE}/sessions/media/${mediaId}/file`, {
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
-    });
+    const res = await fetch(`${API_BASE}/sessions/media/${mediaId}/file`);
     if (!res.ok) {
       throw new Error(`Failed to load media (${res.status})`);
     }
@@ -134,12 +94,20 @@ class ApiClient {
     });
   }
 
+  async listSessionJobs(sessionId: string): Promise<AnalysisRun[]> {
+    return this.request<AnalysisRun[]>(`/sessions/${sessionId}/jobs`);
+  }
+
+  async getJobResults(jobId: string): Promise<AnalysisResult | null> {
+    return this.request<AnalysisResult | null>(`/jobs/${jobId}/results`);
+  }
+
   async getJob(jobId: string): Promise<AnalysisJob> {
     return this.request<AnalysisJob>(`/jobs/${jobId}`);
   }
 
-  async getJobChunks(jobId: string): Promise<AnalysisChunk[]> {
-    return this.request<AnalysisChunk[]>(`/jobs/${jobId}/chunks`);
+  async getJobChunks(jobId: string, afterIndex = -1): Promise<AnalysisChunk[]> {
+    return this.request<AnalysisChunk[]>(`/jobs/${jobId}/chunks?after_index=${afterIndex}`);
   }
 
   async cancelJob(jobId: string): Promise<AnalysisJob> {
@@ -156,11 +124,16 @@ class ApiClient {
     return `${API_BASE}/sessions/${sessionId}/results/export?format=${format}`;
   }
 
+  async downloadTimeline(jobId: string, format: 'json' | 'csv'): Promise<void> {
+    const response = await fetch(`${API_BASE}/jobs/${jobId}/analytics/export?format=${format}`);
+    if (!response.ok) throw new Error('Timeline export failed');
+    const url = URL.createObjectURL(await response.blob());
+    const link = document.createElement('a'); link.href = url; link.download = `timeline_${jobId}.${format}`;
+    document.body.appendChild(link); link.click(); link.remove(); URL.revokeObjectURL(url);
+  }
+
   async downloadExport(sessionId: string, format: 'json' | 'csv'): Promise<void> {
-    const token = localStorage.getItem('token');
-    const res = await fetch(this.getExportUrl(sessionId, format), {
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
-    });
+    const res = await fetch(this.getExportUrl(sessionId, format));
     if (!res.ok) {
       throw new Error(`Export failed (${res.status})`);
     }

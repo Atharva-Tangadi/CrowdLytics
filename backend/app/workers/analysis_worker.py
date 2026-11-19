@@ -9,11 +9,20 @@ import cv2
 from app.db.session import SessionLocal
 from app.models.entities import AnalysisJob, MediaAsset, AnalysisChunk, CrowdAnalysisResult, CrowdGroupSummary
 from app.cv.preprocessing.processor import ImagePreprocessor
-from app.cv.localization.detector import AerialBlobDensityDetector
+from app.cv.localization.person import create_detector
+from app.cv.motion.people import PersonTracker, MembershipGroupTracker
+from app.cv.clustering.density import DensityClusterer
+from app.cv.clustering.temporal import PersistentSpatialGroups
 from app.cv.clustering.hac import HierarchicalClusterer
 from app.cv.closeness.estimator import ClosenessEstimator
-from app.cv.motion.analyzer import VideoMotionAnalyzer
 from app.cv.formation.tracker import FormationTracker
+from app.cv.geometry import convex_hull
+from app.cv.motion.groups import ClusterMotionTracker
+from app.cv.motion.scene import register_scene, source_timestamp
+from app.cv.formation.crowd_increase import CrowdIncreaseDetector
+from app.schemas.api import AnalysisConfigRequest
+from app.cv.analytics import summarize_frames
+from types import SimpleNamespace
 
 logger = logging.getLogger("crowdlytics.worker")
 
@@ -98,6 +107,8 @@ class StableGroupTracker:
 def execute_analysis_job(job_id: str) -> None:
     """Executes crowd analysis asynchronously for an AnalysisJob."""
     db = SessionLocal()
+    job = None
+    cap = None
     try:
         job = db.query(AnalysisJob).filter(AnalysisJob.id == job_id).first()
         if not job or job.status in ["CANCELLED", "COMPLETED"]:
@@ -126,9 +137,13 @@ def execute_analysis_job(job_id: str) -> None:
         dist_thresh = float(config.get("distance_threshold", 50.0))
         linkage_method = str(config.get("linkage_method", "ward"))
 
+        options = AnalysisConfigRequest.model_validate(dict(config, media_asset_id=media.id))
         preprocessor = ImagePreprocessor()
-        detector = AerialBlobDensityDetector()
+        detector = create_detector(options.detector_backend)
+        learned = hasattr(detector, 'sha256')
         clusterer = HierarchicalClusterer(distance_threshold=dist_thresh, linkage_method=linkage_method)
+        if options.clustering_method == 'density':
+            clusterer = DensityClusterer(dist_thresh)
         closeness_estimator = ClosenessEstimator()
 
         if media.media_type == "IMAGE":
@@ -154,6 +169,8 @@ def execute_analysis_job(job_id: str) -> None:
                 for p in detection_res.points:
                     p.x /= scale
                     p.y /= scale
+                    if p.bbox:
+                        p.bbox = [v / scale for v in p.bbox]
 
             job.current_stage = "Performing hierarchical clustering"
             job.progress_pct = 60
@@ -182,7 +199,14 @@ def execute_analysis_job(job_id: str) -> None:
                     "distance_threshold": dist_thresh,
                     "linkage_method": linkage_method,
                     "unclustered_count": len(clustering_res.unclustered_points),
-                    "media_type": "IMAGE"
+                    "media_type": "IMAGE",
+                    "detector": detection_res.model_name,
+                    "detector_metadata": detection_res.metadata,
+                    "annotation_version": 3,
+                    "media_asset_id": media.id,
+                    "group_annotations": [{"cluster_id": c.cluster_id, "convex_hull": convex_hull(c.member_points),
+                                           "motion_status": "UNAVAILABLE_IMAGE", "speed_unit": "px/s"}
+                                          for c in clustering_res.clusters]
                 })
             )
             db.add(result)
@@ -224,9 +248,15 @@ def execute_analysis_job(job_id: str) -> None:
             if total_frames <= 0:
                 total_frames = media.frame_count or 100
 
-            motion_analyzer = VideoMotionAnalyzer()
+            motion_tracker = ClusterMotionTracker(options.association_distance_px,
+                options.motion_min_displacement_px, options.motion_smoothing,
+                max_gap=max(2., options.sample_interval_frames / fps * 2))
+            people_tracker = PersonTracker(options.track_hold_seconds)
+            membership_tracker = MembershipGroupTracker(use_cluster_ids=True)
+            spatial_tracker = PersistentSpatialGroups(clusterer, dist_thresh)
+            previous_observations = []
+            increase_detector = CrowdIncreaseDetector(options.crowd_increase)
             formation_tracker = FormationTracker()
-            group_tracker = StableGroupTracker(max_distance=85.0)
 
             sample_interval = int(config.get("sample_interval_frames", 5))
             chunk_duration_sec = float(config.get("chunk_duration_sec", 2.0))
@@ -248,14 +278,26 @@ def execute_analysis_job(job_id: str) -> None:
             latest_closeness = None
             latest_count = 0
             latest_conf = 0.0
+            previous_timestamp = None
+            sample_count = 0
+            latest_groups = []
+            timestamp_sources = set()
 
             while cap.isOpened():
+                # Read current status independently of this worker's ORM identity cache.
+                with SessionLocal() as status_db:
+                    state = status_db.query(AnalysisJob.status).filter(AnalysisJob.id == job_id).scalar()
+                if state is None or state == "CANCELLED":
+                    db.rollback()
+                    return
                 ret, frame = cap.read()
                 if not ret:
                     break
 
                 if frame_idx % sample_interval == 0:
-                    current_timestamp = round(float(frame_idx / fps), 3)
+                    current_timestamp, timestamp_source = source_timestamp(cap, frame_idx, fps, previous_timestamp)
+                    timestamp_sources.add(timestamp_source)
+                    sample_count += 1
                     processed_frame, scale = preprocessor.preprocess(frame)
                     det = detector.detect(processed_frame, confidence_threshold=conf_thresh)
 
@@ -264,8 +306,22 @@ def execute_analysis_job(job_id: str) -> None:
                         for p in det.points:
                             p.x /= scale
                             p.y /= scale
+                            if p.bbox:
+                                p.bbox = [v / scale for v in p.bbox]
 
-                    clustering = clusterer.cluster(det.points)
+                    # Register and track previous member locations before independently grouping.
+                    references = ([SimpleNamespace(bounding_box=o['point'].bbox or
+                        [o['point'].x-4,o['point'].y-4,o['point'].x+4,o['point'].y+4])
+                        for o in previous_observations] if learned else prev_clusters)
+                    transform, camera_reliable, scene_stable, camera_status = register_scene(
+                        prev_frame, processed_frame, references, scale, options.camera_mode)
+                    if learned and camera_status == 'SCENE_CHANGED':
+                        people_tracker.tracks.clear()
+                        membership_tracker.groups.clear()
+                        spatial_tracker.members.clear()
+                    observations = people_tracker.update(det.points,current_timestamp,prev_frame,processed_frame,
+                        scale,transform,camera_reliable) if learned else []
+                    clustering = spatial_tracker.cluster(observations,current_timestamp) if learned else clusterer.cluster(det.points)
                     closeness = closeness_estimator.compute_all(clustering.clusters)
 
                     latest_clustering = clustering
@@ -273,20 +329,19 @@ def execute_analysis_job(job_id: str) -> None:
                     latest_count = det.total_count
                     latest_conf = det.mean_confidence
 
-                    # 1. Stable Group ID Tracking
-                    stable_ids = group_tracker.assign_ids(clustering.clusters, frame_idx)
-
-                    # 2. Optical Flow & Motion Analysis
-                    m_res = None
-                    if prev_frame is not None:
-                        pts_tuples = [(p.x, p.y) for p in det.points]
-                        m_res = motion_analyzer.analyze_motion(prev_frame, processed_frame, pts_tuples)
-                        if m_res.dominant_direction_deg is not None:
-                            all_sampled_directions.append(m_res.dominant_direction_deg)
+                    motions = (membership_tracker.update(clustering.clusters,observations,current_timestamp)
+                               if learned else motion_tracker.update(clustering.clusters,current_timestamp,
+                                                                     transform,camera_reliable))
+                    for motion in motions:
+                        if motion["motion_angle_deg"] is not None:
+                            all_sampled_directions.append(motion["motion_angle_deg"])
+                    crowd_event = (increase_detector.update(current_timestamp, det.total_count,
+                                   valid=scene_stable or prev_frame is None)
+                                   if options.crowd_increase.enabled else {"state": "DISABLED"})
 
                     # 3. Formation Transitions
                     f_record_map = {}
-                    if prev_clusters and prev_metrics:
+                    if prev_clusters and prev_metrics and scene_stable:
                         f_records = formation_tracker.analyze_temporal_transitions(
                             prev_clusters, prev_metrics, clustering.clusters, closeness.group_metrics
                         )
@@ -298,44 +353,12 @@ def execute_analysis_job(job_id: str) -> None:
                     # 4. Build Per-Group Annotations for this frame
                     frame_groups_data = []
                     for c_idx, (cluster, metric) in enumerate(zip(clustering.clusters, closeness.group_metrics)):
-                        gid = stable_ids[c_idx] if c_idx < len(stable_ids) else (cluster.cluster_id + 1)
-
-                        # Convex Hull vertices
-                        pts_arr = np.array([[round(p.x, 1), round(p.y, 1)] for p in cluster.member_points], dtype=np.float32)
-                        if len(pts_arr) >= 3:
-                            try:
-                                hull = cv2.convexHull(pts_arr)
-                                hull_coords = [[round(float(pt[0][0]), 1), round(float(pt[0][1]), 1)] for pt in hull]
-                            except Exception:
-                                hull_coords = [[round(float(p.x), 1), round(float(p.y), 1)] for p in cluster.member_points]
-                        else:
-                            hull_coords = [[round(float(p.x), 1), round(float(p.y), 1)] for p in cluster.member_points]
-
-                        # Group-level motion: filter vectors belonging to this cluster
-                        grp_angle = None
-                        grp_speed = 0.0
-                        grp_conf = 0.0
-                        if m_res and m_res.vectors:
-                            bx1, by1, bx2, by2 = cluster.bounding_box
-                            matched_vecs = [
-                                v for v in m_res.vectors
-                                if bx1 - 10 <= v.x <= bx2 + 10 and by1 - 10 <= v.y <= by2 + 10
-                            ]
-                            if matched_vecs:
-                                rads = np.radians([v.angle_degrees for v in matched_vecs])
-                                grp_angle = float(np.degrees(np.arctan2(np.sum(np.sin(rads)), np.sum(np.cos(rads)))) % 360.0)
-                                grp_speed = float(np.mean([v.magnitude for v in matched_vecs]))
-                                grp_conf = float(min(len(matched_vecs) / max(cluster.size, 1), 1.0))
-                            elif m_res.dominant_direction_deg is not None:
-                                grp_angle = m_res.dominant_direction_deg
-                                grp_speed = m_res.mean_speed
-                                grp_conf = m_res.confidence * 0.7
-
-                        direction_label = angle_to_8way_direction(grp_angle, grp_speed)
-                        formation_state = f_record_map.get(cluster.cluster_id, "stationary")
+                        motion = motions[c_idx]
+                        hull_coords = convex_hull(cluster.member_points)
+                        formation_state = f_record_map.get(cluster.cluster_id, "stationary" if scene_stable else "uncertain")
 
                         frame_groups_data.append({
-                            "group_id": gid,
+                            **motion,
                             "cluster_id": cluster.cluster_id,
                             "member_count": cluster.size,
                             "centroid": [round(cluster.centroid[0], 1), round(cluster.centroid[1], 1)],
@@ -343,21 +366,32 @@ def execute_analysis_job(job_id: str) -> None:
                             "convex_hull": hull_coords,
                             "mean_nn_distance": round(metric.mean_nn_distance, 1),
                             "density_per_kpx": round(metric.density_per_kpx, 2),
-                            "motion_angle_deg": round(grp_angle, 1) if grp_angle is not None else None,
-                            "motion_speed": round(grp_speed, 2),
-                            "direction_label": direction_label,
-                            "motion_confidence": round(grp_conf, 2),
+                            "convex_hull_area": metric.convex_hull_area,
                             "formation_state": formation_state
                         })
 
                     chunk_frames_data.append({
+                        "annotation_version": 3,
                         "timestamp": current_timestamp,
+                        "valid_until": min(media.duration_seconds or float("inf"), current_timestamp + 1.5 * sample_interval / fps),
+                        "timestamp_source": timestamp_source,
+                        "camera_status": camera_status,
+                        "crowd_event": crowd_event,
                         "frame_index": frame_idx,
                         "crowd_count": det.total_count,
+                        "tracked_count": len(observations) if learned else det.total_count,
+                        "cluster_count": len(clustering.clusters),
+                        "mean_closeness_px": closeness.global_mean_nn_distance,
+                        "mean_density_per_kpx": closeness.global_mean_density_per_kpx,
+                        "detector": det.model_name,
+                        "detection_diagnostics": det.metadata,
                         "confidence": round(det.mean_confidence, 2),
                         "groups": frame_groups_data
                     })
 
+                    latest_groups = frame_groups_data
+                    previous_observations = observations
+                    previous_timestamp = current_timestamp
                     prev_frame = processed_frame.copy()
                     prev_clusters = clustering.clusters
                     prev_metrics = closeness.group_metrics
@@ -385,10 +419,12 @@ def execute_analysis_job(job_id: str) -> None:
 
                     chunk_index += 1
                     current_chunk_start_frame = frame_idx
-                    chunk_start_timestamp = chunk_end_timestamp
+                    chunk_start_timestamp = frame_idx / fps
                     chunk_frames_data = []
 
             cap.release()
+            if sample_count == 0:
+                raise ValueError("Video contains no decodable frames.")
 
             # Finalize remaining frames in last chunk if any
             if chunk_frames_data:
@@ -412,7 +448,7 @@ def execute_analysis_job(job_id: str) -> None:
                 rads = np.radians(all_sampled_directions)
                 dominant_dir = float(np.degrees(np.arctan2(np.sum(np.sin(rads)), np.sum(np.cos(rads)))) % 360.0)
 
-            dom_formation = "stationary"
+            dom_formation = "uncertain"
             if all_sampled_formations:
                 from collections import Counter
                 dom_formation = Counter(all_sampled_formations).most_common(1)[0][0]
@@ -420,6 +456,9 @@ def execute_analysis_job(job_id: str) -> None:
             job.current_stage = "Finalizing video analysis results"
             job.progress_pct = 95
             db.commit()
+
+            persisted_frames = [f for chunk in db.query(AnalysisChunk).filter(AnalysisChunk.job_id == job.id)
+                                .order_by(AnalysisChunk.chunk_index).all() for f in json.loads(chunk.frame_data_json)]
 
             result = CrowdAnalysisResult(
                 job_id=job.id,
@@ -432,7 +471,20 @@ def execute_analysis_job(job_id: str) -> None:
                 dominant_formation_type=dom_formation,
                 summary_data_json=json.dumps({
                     "media_type": "VIDEO",
-                    "frames_sampled": frame_idx // sample_interval,
+                    "annotation_version": 3,
+                    "media_asset_id": media.id,
+                    "frames_sampled": sample_count,
+                    "timestamp_sources": sorted(timestamp_sources),
+                    "angle_convention": "atan2(-dy, dx); 0=right, 90=up; image-relative",
+                    "speed_unit": "px/s",
+                    "camera_mode": options.camera_mode,
+                    "count_semantics": "last_sampled_frame; timeline stores visible detections per observation",
+                    "video_analytics": summarize_frames(persisted_frames),
+                    "detector": det.model_name,
+                    "detector_metadata": det.metadata,
+                    "crowd_events": increase_detector.events,
+                    "group_annotations": latest_groups,
+                    "analysis_config": options.model_dump(),
                     "chunks_count": chunk_index,
                     "dominant_formation": dom_formation
                 })
@@ -441,10 +493,10 @@ def execute_analysis_job(job_id: str) -> None:
             db.flush()
 
             if latest_clustering and latest_closeness:
-                for c, m in zip(latest_clustering.clusters, latest_closeness.group_metrics):
+                for c, m, annotation in zip(latest_clustering.clusters, latest_closeness.group_metrics, latest_groups):
                     group = CrowdGroupSummary(
                         result_id=result.id,
-                        cluster_id=c.cluster_id,
+                        cluster_id=annotation["group_id"],
                         member_count=c.size,
                         centroid_x=c.centroid[0],
                         centroid_y=c.centroid[1],
@@ -452,26 +504,38 @@ def execute_analysis_job(job_id: str) -> None:
                         convex_hull_area=m.convex_hull_area,
                         mean_nn_distance=m.mean_nn_distance,
                         density_per_kpx=m.density_per_kpx,
-                        motion_angle_deg=dominant_dir,
-                        motion_speed=None,
-                        formation_state=dom_formation
+                        motion_angle_deg=annotation["motion_angle_deg"],
+                        motion_speed=annotation["motion_speed"],
+                        formation_state=annotation["formation_state"]
                     )
                     db.add(group)
 
+        with SessionLocal() as status_db:
+            state = status_db.query(AnalysisJob.status).filter(AnalysisJob.id == job_id).scalar()
+        if state is None or state == "CANCELLED":
+            db.rollback()
+            return
         # Complete Job
-        job.status = "COMPLETED"
-        job.progress_pct = 100
-        job.current_stage = "Analysis complete"
-        job.completed_at = datetime.utcnow()
+        db.flush()
+        completed = db.query(AnalysisJob).filter(
+            AnalysisJob.id == job_id, AnalysisJob.status == "RUNNING"
+        ).update({"status": "COMPLETED", "progress_pct": 100,
+                  "current_stage": "Analysis complete", "completed_at": datetime.utcnow()},
+                 synchronize_session=False)
+        if not completed:
+            db.rollback()
+            return
         db.commit()
 
     except Exception as exc:
         logger.exception("Error executing analysis job %s: %s", job_id, exc)
         db.rollback()
         if job:
-            job.status = "FAILED"
-            job.error_message = str(exc)
-            job.completed_at = datetime.utcnow()
+            db.query(AnalysisJob).filter(AnalysisJob.id == job_id, AnalysisJob.status != "CANCELLED").update(
+                {"status": "FAILED", "error_message": str(exc), "completed_at": datetime.utcnow()},
+                synchronize_session=False)
             db.commit()
     finally:
+        if cap is not None:
+            cap.release()
         db.close()

@@ -1,20 +1,17 @@
-# Security & Privacy Architecture
+# Local workspace access and storage
 
-## 1. Privacy by Design
-- **Crowd-Level Insights Only**: No facial recognition, individual tracking, demographic classification, or biometric profiling.
-- **Aggregated Results**: Persistent database records contain cluster statistics, centroids, convex hull areas, and density measures.
+The application has no registration, login, bearer tokens or per-user access control.
+The dashboard and API expose a shared workspace on the local computer. Existing
+sessions are listed regardless of their legacy owner. New sessions use an internal,
+non-login bookkeeping owner so existing databases require no destructive migration.
+Legacy accounts and password hashes remain in the database but are not exposed by
+any profile, registration or login endpoint.
 
-## 2. Authentication & Authorization
-- **Password Protection**: Passwords hashed using bcrypt.
-- **Signed Tokens**: HMAC-SHA256 JWT tokens.
-- **Strict Tenant Isolation**: All session, media, job, and result queries require user ownership matching the authenticated JWT token. Unauthorized requests yield `404 Not Found`.
+Vite, the native backend startup script and Docker published ports bind to loopback.
+No public deployment is configured. Media paths are resolved within approved storage
+roots, uploads are validated, and job/media session associations remain enforced.
+Deletion still removes the requested session/media and associated artifacts.
 
-## 3. Media Ingestion Security
-- **Server-Side File Keys**: Uploads are saved under UUIDv4 keys in a non-executable directory.
-- **Format Verification**: File contents and dimensions are validated via OpenCV decoding.
-- **Directory Traversal Prevention**: Storage paths are resolved and validated against the storage root directory.
-
-## 4. API & Infrastructure Security
-- **SQL Injection Prevention**: Parameterized queries via SQLAlchemy 2.0 ORM.
-- **Cross-Origin Resource Sharing (CORS)**: Restricted to configured domains in production.
-- **Secret Management**: Environment variables used for credentials; `.env.example` contains only non-sensitive placeholders.
+The former /api/v1/auth endpoints are removed, including from OpenAPI. No signing
+secret is required. Old browser tokens have no effect and the client no longer reads
+or sends them. CORS does not allow credentialed requests.

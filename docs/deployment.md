@@ -1,3 +1,7 @@
+> **Current access model:** authentication has been removed. Open the dashboard directly.
+> Sessions, media, jobs and exports share one local workspace; historical authentication
+> descriptions below are superseded. Legacy data is retained without reassignment.
+
 # Local Operations & Deployment Guide
 
 ## 1. Execution Environments

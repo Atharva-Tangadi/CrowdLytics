@@ -1,3 +1,9 @@
+> **Current video pipeline:** see [video playback fixes](video-playback-fixes.md). Real videos use the local overhead-person model; generated dot demonstrations must explicitly select **Synthetic blob demo only**. Old detector limitations below describe the prior version.
+
+> **Current access model:** authentication has been removed. Open the dashboard directly.
+> Sessions, media, jobs and exports share one local workspace; historical authentication
+> descriptions below are superseded. Legacy data is retained without reassignment.
+
 # Aerial Crowd Intelligence — User Guide & Demonstration Manual
 
 ## 1. System Overview

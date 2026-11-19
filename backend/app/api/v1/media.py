@@ -1,12 +1,13 @@
 """Media asset ingestion and retrieval endpoints."""
 from typing import List
+from pathlib import Path
+from app.core.config import settings
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
-from app.models.entities import User, AnalysisSession, MediaAsset
-from app.auth.deps import get_current_user
+from app.models.entities import AnalysisSession, MediaAsset
 from app.storage.service import storage_service
 from app.schemas.api import MediaAssetResponse
 
@@ -17,18 +18,25 @@ router = APIRouter(prefix="/sessions", tags=["Media"])
 async def upload_media(
     session_id: str,
     file: UploadFile = File(...),
-    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Uploads and validates image or video media into a session."""
     session = db.query(AnalysisSession).filter(
         AnalysisSession.id == session_id,
-        AnalysisSession.user_id == current_user.id
     ).first()
     if not session:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found.")
 
-    contents = await file.read()
+    ext = Path(file.filename or "").suffix.lower()
+    if ext not in {".jpg", ".jpeg", ".png", ".mp4", ".mov", ".avi"}:
+        raise HTTPException(status_code=400, detail="Unsupported media extension.")
+    limit = (settings.MAX_IMAGE_SIZE_MB if ext in {".jpg", ".jpeg", ".png"}
+             else settings.MAX_VIDEO_SIZE_MB) * 1024 * 1024
+    contents = bytearray()
+    while block := await file.read(1024 * 1024):
+        contents.extend(block)
+        if len(contents) > limit:
+            raise HTTPException(status_code=413, detail="Media exceeds configured size limit.")
     if len(contents) == 0:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Uploaded file is empty.")
 
@@ -61,13 +69,11 @@ async def upload_media(
 @router.get("/{session_id}/media", response_model=List[MediaAssetResponse])
 def list_session_media(
     session_id: str,
-    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Lists media assets in an owned session."""
+    """Lists media assets in an local session."""
     session = db.query(AnalysisSession).filter(
         AnalysisSession.id == session_id,
-        AnalysisSession.user_id == current_user.id
     ).first()
     if not session:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found.")
@@ -78,13 +84,11 @@ def list_session_media(
 @router.get("/media/{media_id}/file")
 def get_media_file(
     media_id: str,
-    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Securely streams media file verifying session ownership."""
+    """Securely streams media file from private storage."""
     asset = db.query(MediaAsset).join(AnalysisSession).filter(
         MediaAsset.id == media_id,
-        AnalysisSession.user_id == current_user.id
     ).first()
     if not asset:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Media not found.")
@@ -101,13 +105,11 @@ def get_media_file(
 def delete_media(
     session_id: str,
     media_id: str,
-    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Deletes an individual media asset from an owned session."""
+    """Deletes an individual media asset from an local session."""
     session = db.query(AnalysisSession).filter(
         AnalysisSession.id == session_id,
-        AnalysisSession.user_id == current_user.id
     ).first()
     if not session:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found.")

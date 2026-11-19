@@ -38,11 +38,11 @@ services:
     ports:
       - "127.0.0.1:8000:8000"
     environment:
+      - USE_CELERY=true
       - ENVIRONMENT=production
       - DATABASE_URL=postgresql+psycopg2://${POSTGRES_USER:-crowdlytics}:${POSTGRES_PASSWORD:-crowdlytics_secret}@db:5432/${POSTGRES_DB:-crowdlytics}
       - REDIS_URL=redis://redis:6379/0
       - CELERY_BROKER_URL=redis://redis:6379/0
-      - SECRET_KEY=${SECRET_KEY:-production-secret-change-me}
       - STORAGE_TYPE=local
       - DATA_ROOT=/app/data
       - MEDIA_ROOT=/app/data/uploads
@@ -65,11 +65,11 @@ services:
     restart: unless-stopped
     command: python -m app.workers.celery_worker
     environment:
+      - USE_CELERY=true
       - ENVIRONMENT=production
       - DATABASE_URL=postgresql+psycopg2://${POSTGRES_USER:-crowdlytics}:${POSTGRES_PASSWORD:-crowdlytics_secret}@db:5432/${POSTGRES_DB:-crowdlytics}
       - REDIS_URL=redis://redis:6379/0
       - CELERY_BROKER_URL=redis://redis:6379/0
-      - SECRET_KEY=${SECRET_KEY:-production-secret-change-me}
       - STORAGE_TYPE=local
       - DATA_ROOT=/app/data
       - MEDIA_ROOT=/app/data/uploads

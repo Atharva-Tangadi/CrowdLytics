@@ -13,11 +13,8 @@ class Settings(BaseSettings):
     API_V1_STR: str = "/api/v1"
     DEBUG: bool = False
     ENVIRONMENT: str = "development"
-
-    # Security
-    SECRET_KEY: str = "insecure-dev-secret-key-change-in-production-1234567890"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24  # 1 day
-    ALGORITHM: str = "HS256"
+    DEFAULT_DETECTOR: str = "person"
+    PERSON_MODEL_PATH: str = str(BASE_DIR / "models" / "overhead_person.onnx")
 
     # Database
     DATABASE_URL: str = f"sqlite:///{BASE_DIR}/crowdlytics.db"

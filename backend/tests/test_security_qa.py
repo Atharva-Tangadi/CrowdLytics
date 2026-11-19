@@ -20,69 +20,33 @@ def clean_db():
     Base.metadata.create_all(bind=engine)
 
 
-# --- 1. Unauthorized Access & Token Validation ---
-def test_unauthorized_endpoints():
-    """Verify that unauthenticated requests to protected endpoints return 401."""
-    assert client.get("/api/v1/auth/me").status_code == 401
-    assert client.get("/api/v1/sessions").status_code == 401
-    assert client.post("/api/v1/sessions", json={"title": "Test"}).status_code == 401
-    assert client.get("/api/v1/jobs/nonexistent-job-id").status_code == 401
-    assert client.get("/api/v1/sessions/nonexistent-session-id/results").status_code == 401
+def test_endpoints_need_no_credentials_and_missing_resources_still_return_404():
+    assert client.get('/api/v1/sessions').status_code == 200
+    assert client.post('/api/v1/sessions',json={'title':'Local'}).status_code == 201
+    assert client.get('/api/v1/jobs/missing').status_code == 404
+    assert client.get('/api/v1/sessions/missing/results').status_code == 404
 
 
-def test_malformed_token_rejection():
-    """Verify that forged, malformed, or garbage tokens are rejected."""
-    bad_headers = {"Authorization": "Bearer not.a.valid.jwt.token"}
-    resp = client.get("/api/v1/sessions", headers=bad_headers)
-    assert resp.status_code == 401
-    assert resp.json()["detail"] == "Could not validate credentials"
+def test_stale_token_is_ignored():
+    response = client.get('/api/v1/sessions', headers={'Authorization':'Bearer obsolete-token'})
+    assert response.status_code == 200
 
 
-# --- 2. Multi-Tenant Cross-User Attack Tests ---
-def test_cross_tenant_isolation_and_export_defense():
-    """Verify that User B cannot read, download, or export User A's session results."""
-    # Register User A & User B
-    client.post("/api/v1/auth/register", json={"email": "alice@example.com", "password": "Password123"})
-    token_a = client.post("/api/v1/auth/login", json={"email": "alice@example.com", "password": "Password123"}).json()["access_token"]
-    headers_a = {"Authorization": f"Bearer {token_a}"}
-
-    client.post("/api/v1/auth/register", json={"email": "bob@example.com", "password": "Password123"})
-    token_b = client.post("/api/v1/auth/login", json={"email": "bob@example.com", "password": "Password123"}).json()["access_token"]
-    headers_b = {"Authorization": f"Bearer {token_b}"}
-
-    # Alice creates a confidential session
-    sess_a = client.post("/api/v1/sessions", json={"title": "Alice Confidential Area"}, headers=headers_a).json()
-    session_a_id = sess_a["id"]
-
-    # Bob attempts to get Alice's session -> must return 404
-    bob_sess_get = client.get(f"/api/v1/sessions/{session_a_id}", headers=headers_b)
-    assert bob_sess_get.status_code == 404
-
-    # Bob attempts to upload media to Alice's session -> must return 404
-    img = np.zeros((100, 100, 3), dtype=np.uint8)
-    _, img_encoded = cv2.imencode(".png", img)
-    bob_upload = client.post(
-        f"/api/v1/sessions/{session_a_id}/media",
-        files={"file": ("intruder.png", img_encoded.tobytes(), "image/png")},
-        headers=headers_b
-    )
-    assert bob_upload.status_code == 404
-
-    # Bob attempts to export Alice's results -> must return 404
-    bob_export = client.get(f"/api/v1/sessions/{session_a_id}/results/export?format=json", headers=headers_b)
-    assert bob_export.status_code == 404
-
-    # Bob attempts to delete Alice's session -> must return 404
-    bob_delete = client.delete(f"/api/v1/sessions/{session_a_id}", headers=headers_b)
-    assert bob_delete.status_code == 404
+def test_media_cannot_be_used_from_an_unrelated_session():
+    one = client.post('/api/v1/sessions',json={'title':'One'}).json()['id']
+    two = client.post('/api/v1/sessions',json={'title':'Two'}).json()['id']
+    _, encoded = cv2.imencode('.png',np.zeros((100,100,3),np.uint8))
+    media = client.post(f'/api/v1/sessions/{one}/media',
+        files={'file':('test.png',encoded.tobytes(),'image/png')}).json()['id']
+    assert client.post(f'/api/v1/sessions/{two}/analyze',json={'media_asset_id':media}).status_code == 404
+    assert client.delete(f'/api/v1/sessions/{two}/media/{media}').status_code == 404
+    assert client.get(f'/api/v1/sessions/media/{media}/file').status_code == 200
 
 
 # --- 3. Upload Abuse & Corrupted Media Security ---
 def test_corrupted_and_empty_media_rejection():
     """Verify that corrupt or zero-byte uploads are cleanly rejected with HTTP 400."""
-    client.post("/api/v1/auth/register", json={"email": "media_tester@example.com", "password": "Password123"})
-    token = client.post("/api/v1/auth/login", json={"email": "media_tester@example.com", "password": "Password123"}).json()["access_token"]
-    headers = {"Authorization": f"Bearer {token}"}
+    headers = {}
     session_id = client.post("/api/v1/sessions", json={"title": "Media Test Session"}, headers=headers).json()["id"]
 
     # 1. Zero-byte file
@@ -116,9 +80,7 @@ def test_corrupted_and_empty_media_rejection():
 # --- 4. Cascade Deletion Integrity ---
 def test_cascade_deletion():
     """Verify that deleting a session deletes associated media, jobs, and results."""
-    client.post("/api/v1/auth/register", json={"email": "cascade@example.com", "password": "Password123"})
-    token = client.post("/api/v1/auth/login", json={"email": "cascade@example.com", "password": "Password123"}).json()["access_token"]
-    headers = {"Authorization": f"Bearer {token}"}
+    headers = {}
     session_id = client.post("/api/v1/sessions", json={"title": "To Delete"}, headers=headers).json()["id"]
 
     # Upload valid image
@@ -153,9 +115,7 @@ def test_worker_missing_file_failure():
     """Verify worker transitions job to FAILED when media file is missing or unreadable."""
     from app.workers.analysis_worker import execute_analysis_job
 
-    client.post("/api/v1/auth/register", json={"email": "fail_test@example.com", "password": "Password123"})
-    token = client.post("/api/v1/auth/login", json={"email": "fail_test@example.com", "password": "Password123"}).json()["access_token"]
-    headers = {"Authorization": f"Bearer {token}"}
+    headers = {}
     session_id = client.post("/api/v1/sessions", json={"title": "Failure Session"}, headers=headers).json()["id"]
 
     # Upload valid image first
@@ -195,9 +155,7 @@ def test_worker_missing_file_failure():
 # --- 6. End-to-End Video Analysis Workflow Test ---
 def test_video_analysis_pipeline_workflow(tmp_path):
     """Verify video upload, background processing, motion analysis, and formation tracking."""
-    client.post("/api/v1/auth/register", json={"email": "video_tester@example.com", "password": "Password123"})
-    token = client.post("/api/v1/auth/login", json={"email": "video_tester@example.com", "password": "Password123"}).json()["access_token"]
-    headers = {"Authorization": f"Bearer {token}"}
+    headers = {}
     session_id = client.post("/api/v1/sessions", json={"title": "Drone Video Test"}, headers=headers).json()["id"]
 
     # Create a small synthetic 15-frame video file

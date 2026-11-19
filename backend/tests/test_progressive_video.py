@@ -126,12 +126,10 @@ def test_progressive_video_chunk_workflow(tmp_path):
     - Precise presentation timestamps (t = frame_idx / fps).
     - Stable group identifiers.
     - Direction vectors and 8-way direction labels.
-    - Accessible via authenticated GET /jobs/{job_id}/chunks with tenant isolation.
+    - Accessible via login-free GET /jobs/{job_id}/chunks.
     """
     email = "progressive_tester@example.com"
-    client.post("/api/v1/auth/register", json={"email": email, "password": "Password123"})
-    token = client.post("/api/v1/auth/login", json={"email": email, "password": "Password123"}).json()["access_token"]
-    headers = {"Authorization": f"Bearer {token}"}
+    headers = {}
 
     sess_resp = client.post("/api/v1/sessions", json={"title": "Progressive Drone Session"}, headers=headers)
     session_id = sess_resp.json()["id"]
@@ -219,8 +217,6 @@ def test_progressive_video_chunk_workflow(tmp_path):
     assert len(grp["convex_hull"]) >= 1
     assert "direction_label" in grp
 
-    # Multi-tenant security check: User B cannot access User A's chunks
-    client.post("/api/v1/auth/register", json={"email": "attacker@example.com", "password": "Password123"})
-    b_token = client.post("/api/v1/auth/login", json={"email": "attacker@example.com", "password": "Password123"}).json()["access_token"]
-    unauth_resp = client.get(f"/api/v1/jobs/{job_id}/chunks", headers={"Authorization": f"Bearer {b_token}"})
-    assert unauth_resp.status_code == 404
+    # Another local client can read the same workspace without credentials.
+    other = TestClient(app)
+    assert other.get(f"/api/v1/jobs/{job_id}/chunks").status_code == 200

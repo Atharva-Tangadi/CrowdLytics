@@ -1,5 +1,20 @@
 # Aerial Crowd Intelligence
 
+> **Video output update:** real footage now defaults to a local overhead-person
+> ONNX detector, persistent member-based groups, playback-synchronized count cards
+> and stored timeline analytics. Run `python scripts/setup_person_model.py` once
+> when setting up a new machine. See [video playback fixes](docs/video-playback-fixes.md).
+
+> **Login-free local workspace:** the app opens directly to the dashboard. All existing
+> sessions and media are accessible locally without accounts or tokens. Legacy user
+> rows are preserved for database compatibility; no migration or re-registration is needed.
+
+> Updated implementation: see [enhancement report](docs/enhancement-report.md) for
+> timestamped cluster speed, static-camera mode, sudden crowd-increase events,
+> hull controls, current defaults, verification and limitations. Counts still use
+> a heuristic blob detector; detector scores and synthetic benchmarks do not
+> establish real-world crowd-count accuracy. New direction angles use 90°=up.
+
 **Hierarchical Clustering-Based Spatial Grouping, Closeness Estimation, and Collective Movement Analysis**
 
 A local-first, fully self-hosted academic engineering system designed to analyze high-altitude aerial photographs and drone video footage for crowd-level spatial organization, hierarchical grouping, compactness, and collective movement dynamics.
@@ -25,14 +40,14 @@ Aerial Crowd Intelligence is built from the ground up for **crowd-level and grou
 | **Collective Movement Direction** | **Never** | Yes | Compensated velocity vectors & circular mean direction |
 | **Temporal Formation Dynamics** | **Never** | Yes | Bipartite association (Merging, Splitting, Expanding, etc.) |
 | **Zero-Motion Hallucination** | **Strict Invariant** | N/A | Still images unconditionally yield `null` for motion |
-| **Authenticated Data Export** | Yes (JSON, CSV) | Yes (JSON, CSV) | Multi-tenant ownership verification & streaming downloads |
+| **Local Data Export** | Yes (JSON, CSV) | Yes (JSON, CSV) | Local JSON & CSV downloads |
 
 ---
 
 ## 2. Technology Stack
 
 - **Frontend:** React 18, TypeScript (strict mode), Vite, Tailwind CSS, Lucide icons, HTML5 Canvas overlay engine, Vitest.
-- **Backend:** Python 3.10+, FastAPI, Pydantic v2, SQLAlchemy 2.0 (declarative), Alembic migrations, native Bcrypt, HMAC-SHA256 JWT tokens.
+- **Backend:** Python 3.10+, FastAPI, Pydantic v2, SQLAlchemy 2.0 (declarative), Alembic migrations, a shared local workspace without authentication.
 - **Computer Vision & Scientific Algorithms:** OpenCV, SciPy (`scipy.cluster.hierarchy`, `scipy.spatial.cKDTree`, `scipy.spatial.ConvexHull`), scikit-learn, NumPy.
 - **Data & Task Broker:** PostgreSQL, Redis, Celery worker (Containerized mode) / SQLite & FastAPI `BackgroundTasks` (Direct local host mode).
 - **Storage:** Local private volume architecture (`data/uploads/`, `data/processed/`, `data/results/`, `data/temporary/`).
@@ -140,7 +155,7 @@ cd ..
 
 ## 6. Demonstration Workflow
 
-1. **Sign Up & Log In:** Navigate to `http://localhost:5173`, register an account, and log in.
+1. **Open Dashboard:** Navigate to `http://127.0.0.1:5173`; no registration or login is required.
 2. **Create Session:** Add an analysis session in the sidebar (e.g. `City Plaza Demo`).
 3. **Analyze Image:** Click **Analyze Media**, upload an aerial image (JPEG/PNG), configure the distance threshold $\tau$ (default $50\text{ px}$) and linkage (`Ward`), and click **Run Analysis Pipeline**.
 4. **View Overlays & Metrics:** Review cluster bounding boxes, centroids, convex hull areas, mean nearest-neighbor distances, and density tables.
@@ -152,7 +167,7 @@ cd ..
 ## 7. Security & Privacy Guardrails
 
 - **Privacy by Design:** No facial recognition, biometric profiling, or person re-identification.
-- **Tenant Isolation:** Enforced server-side on every route (`WHERE user_id = current_user.id`). Unauthorized access returns HTTP 404 to avoid disclosing resource existence.
+- **Shared local workspace:** All sessions are accessible without credentials. Resource existence and media-to-session association are still validated.
 - **Upload Hardening:** Uploads validated via OpenCV image decoding headers; paths resolved against `DATA_ROOT` to prevent directory traversal. Files stored with UUIDv4 filenames outside web roots.
 - **Network Isolation:** Development services bind exclusively to loopback (`127.0.0.1`).
 
@@ -168,7 +183,7 @@ cd ..
 - [x] Video optical flow paired with affine RANSAC camera motion compensation.
 - [x] Group formation dynamics classified (merging, splitting, expanding, contracting, converging, dispersing).
 - [x] Local media storage segregated under `data/uploads/`, `data/processed/`, `data/results/`, `data/temporary/`.
-- [x] Authentication & authorization with native Bcrypt and JWT access tokens.
+- [x] Direct local dashboard access without login or tokens.
 - [x] Asynchronous background task execution with progress reporting and cancellation.
 - [x] Database migrations verified at head with Alembic.
 - [x] All 26 backend tests and frontend Vitest tests pass cleanly.

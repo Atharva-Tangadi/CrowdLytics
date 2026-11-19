@@ -1,38 +1,38 @@
 import React, { useState, useEffect } from 'react';
-import { useAuth } from './features/auth/AuthContext';
-import { AuthModal } from './features/auth/AuthModal';
 import { ResultCanvas } from './features/analysis/ResultCanvas';
 import { MetricsOverview } from './features/analysis/MetricsOverview';
 import { NewAnalysisModal } from './features/analysis/NewAnalysisModal';
-import { AnalysisSession, AnalysisJob, AnalysisResult, AnalysisChunk, MediaAsset } from './types/api';
+import { AnalysisSession, AnalysisJob, AnalysisRun, AnalysisResult, AnalysisChunk, MediaAsset } from './types/api';
 import { api } from './services/api';
 import {
   Activity,
   Layers,
   Plus,
   Trash2,
-  LogOut,
   FolderOpen,
   Loader2,
   Cpu,
 } from 'lucide-react';
 
 export const App: React.FC = () => {
-  const { user, loading: authLoading, logout } = useAuth();
   const [sessions, setSessions] = useState<AnalysisSession[]>([]);
   const [activeSession, setActiveSession] = useState<AnalysisSession | null>(null);
   const [activeJob, setActiveJob] = useState<AnalysisJob | null>(null);
+  const [runs, setRuns] = useState<AnalysisRun[]>([]);
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
+  const [runError, setRunError] = useState('');
+  const [runLoading, setRunLoading] = useState(false);
   const [activeResult, setActiveResult] = useState<AnalysisResult | null>(null);
   const [activeMedia, setActiveMedia] = useState<MediaAsset | null>(null);
   const [chunks, setChunks] = useState<AnalysisChunk[]>([]);
   const [mediaUrl, setMediaUrl] = useState<string | null>(null);
+  const [reanalyzeMedia, setReanalyzeMedia] = useState<MediaAsset | null>(null);
   const [showNewModal, setShowNewModal] = useState(false);
   const [newTitle, setNewTitle] = useState('');
   const [creatingSession, setCreatingSession] = useState(false);
 
   // Load Sessions
   const refreshSessions = async () => {
-    if (!user) return;
     try {
       const data = await api.listSessions();
       setSessions(data);
@@ -46,84 +46,83 @@ export const App: React.FC = () => {
 
   useEffect(() => {
     refreshSessions();
-  }, [user]);
+  }, []);
 
-  // Load Results and Media for active session
+  // Restore runs independently: an empty newer run never deletes earlier analytics.
   useEffect(() => {
-    if (activeSession) {
-      setChunks([]);
-      api
-        .getResults(activeSession.id)
-        .then((res) => {
-          setActiveResult(res);
-          if (res && res.job_id) {
-            api.getJobChunks(res.job_id).then(setChunks).catch(() => {});
-          }
-          // Fetch media to render canvas
-          api.listMedia(activeSession.id).then(async (media) => {
-            if (media.length > 0) {
-              setActiveMedia(media[0]);
-              try {
-                const blobUrl = await api.getMediaBlobUrl(media[0].id);
-                setMediaUrl(blobUrl);
-              } catch {
-                setMediaUrl(api.getMediaFileUrl(media[0].id));
-              }
-            } else {
-              setActiveMedia(null);
-              setMediaUrl(null);
-            }
-          });
-        })
-        .catch(() => {
-          setActiveResult(null);
-          setActiveMedia(null);
-          setMediaUrl(null);
-          setChunks([]);
-        });
-    }
-  }, [activeSession]);
+    let disposed = false;
+    setActiveJob(null); setActiveResult(null); setChunks([]); setActiveMedia(null); setMediaUrl(null);
+    setRuns([]); setSelectedRunId(null); setRunError('');
+    if (!activeSession) return;
+    api.listSessionJobs(activeSession.id).then(history => {
+      if (disposed) return;
+      setRuns(history);
+      if (history.length) setSelectedRunId(history[0].id);
+    }).catch(error => { if (!disposed) setRunError(String(error)); });
+    return () => { disposed = true; };
+  }, [activeSession?.id]);
 
-  // Poll Active Job & Progressive Chunks
   useEffect(() => {
-    let interval: any = null;
-    if (activeJob && (activeJob.status === 'QUEUED' || activeJob.status === 'RUNNING')) {
-      interval = setInterval(async () => {
-        try {
-          const updated = await api.getJob(activeJob.id);
-          setActiveJob(updated);
+    let disposed = false;
+    if (!selectedRunId || !activeSession) { setRunLoading(false); return; }
+    setRunLoading(true); setRunError(''); setActiveJob(null); setActiveResult(null); setChunks([]);
+    Promise.all([api.getJob(selectedRunId),api.getJobResults(selectedRunId),api.getJobChunks(selectedRunId)])
+      .then(([job,result,completed]) => {
+        if (disposed || job.session_id !== activeSession.id) return;
+        setActiveJob(job); setActiveResult(result); setChunks(completed);
+      }).catch(error => { if (!disposed) setRunError(String(error)); })
+      .finally(() => { if (!disposed) setRunLoading(false); });
+    return () => { disposed = true; };
+  }, [selectedRunId,activeSession?.id]);
 
-          // Progressively fetch completed chunks while running
-          try {
-            const jobChunks = await api.getJobChunks(activeJob.id);
-            if (jobChunks && jobChunks.length > 0) {
-              setChunks(jobChunks);
-            }
-          } catch {}
+  useEffect(() => {
+    let disposed = false;
+    let objectUrl: string | null = null;
+    setMediaUrl(null); setActiveMedia(null);
+    if (!activeSession) return;
+    api.listMedia(activeSession.id).then(async media => {
+      const selected = media.find(m => m.id === activeJob?.media_asset_id) ||
+        (!activeJob ? media[0] : undefined);
+      if (!selected || disposed) return;
+      const url = await api.getMediaBlobUrl(selected.id);
+      if (disposed) { URL.revokeObjectURL(url); return; }
+      objectUrl = url; setActiveMedia(selected); setMediaUrl(url);
+    }).catch(console.error);
+    return () => { disposed = true; if (objectUrl) URL.revokeObjectURL(objectUrl); };
+  }, [activeSession?.id, activeJob?.media_asset_id]);
 
-          if (updated.status === 'COMPLETED') {
-            if (activeSession) {
-              const res = await api.getResults(activeSession.id);
-              setActiveResult(res);
-              const media = await api.listMedia(activeSession.id);
-              if (media.length > 0) {
-                setActiveMedia(media[0]);
-                try {
-                  const blobUrl = await api.getMediaBlobUrl(media[0].id);
-                  setMediaUrl(blobUrl);
-                } catch {
-                  setMediaUrl(api.getMediaFileUrl(media[0].id));
-                }
-              }
-            }
-          }
-        } catch {
-          clearInterval(interval);
+  useEffect(() => {
+    if (!activeJob || !activeSession || activeJob.session_id !== activeSession.id ||
+      !['QUEUED','RUNNING'].includes(activeJob.status)) return;
+    let disposed = false;
+    let busy = false;
+    let cursor = -1;
+    const poll = async () => {
+      if (busy) return;
+      busy = true;
+      try {
+        const updated = await api.getJob(activeJob.id);
+        const fresh = await api.getJobChunks(activeJob.id, cursor);
+        if (disposed) return;
+        if (fresh.length) {
+          cursor = Math.max(...fresh.map(c => c.chunk_index));
+          setChunks(previous => [...new Map([...previous,...fresh].map(c => [c.id,c])).values()]
+            .sort((a,b) => a.chunk_index-b.chunk_index));
         }
-      }, 1500);
-    }
-    return () => clearInterval(interval);
-  }, [activeJob, activeSession]);
+        if (updated.status === 'COMPLETED') {
+          const res = await api.getJobResults(activeJob.id);
+          if (!disposed && res?.job_id === activeJob.id) setActiveResult(res);
+          const history = await api.listSessionJobs(activeSession.id);
+          if (!disposed) setRuns(history);
+        }
+        if (!disposed) setActiveJob(updated);
+      } catch (error) { console.error(error); }
+      finally { busy = false; }
+    };
+    const timer = setInterval(poll,1500);
+    poll();
+    return () => { disposed = true; clearInterval(timer); };
+  }, [activeJob?.id, activeJob?.status, activeSession?.id]);
 
   const handleCreateSession = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -148,30 +147,9 @@ export const App: React.FC = () => {
     }
   };
 
-  if (authLoading) {
-    return (
-      <div className="min-h-screen bg-slate-950 flex items-center justify-center text-slate-400">
-        <Loader2 className="w-8 h-8 animate-spin text-emerald-400" />
-      </div>
-    );
-  }
-
-  if (!user) {
-    return (
-      <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center p-4">
-        <header className="mb-8 text-center space-y-2">
-          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-xs font-semibold">
-            <Activity className="w-3.5 h-3.5" /> High-Altitude Spatial Intelligence
-          </div>
-          <h1 className="text-3xl font-extrabold text-white">Aerial Crowd Intelligence</h1>
-          <p className="text-slate-400 text-sm max-w-sm">
-            Hierarchical clustering-based grouping, closeness estimation, and collective movement dynamics.
-          </p>
-        </header>
-        <AuthModal />
-      </div>
-    );
-  }
+  const selectedRun=runs.find(run => run.id === selectedRunId);
+  const previousWithDetections=runs.find(run => run.media_asset_id === selectedRun?.media_asset_id &&
+    run.id !== selectedRunId && run.result_available && (run.peak_count || 0)>0);
 
   return (
     <div className="min-h-screen bg-slate-950 text-white flex flex-col">
@@ -187,16 +165,7 @@ export const App: React.FC = () => {
           </span>
         </div>
 
-        <div className="flex items-center gap-4">
-          <span className="text-xs text-slate-400">{user.email}</span>
-          <button
-            onClick={logout}
-            className="p-1.5 rounded-lg text-slate-400 hover:text-red-400 hover:bg-slate-800 transition-colors"
-            title="Sign out"
-          >
-            <LogOut className="w-4 h-4" />
-          </button>
-        </div>
+        <span className="text-xs text-slate-400">Local workspace</span>
       </nav>
 
       <div className="flex-1 flex overflow-hidden">
@@ -275,13 +244,32 @@ export const App: React.FC = () => {
                 </div>
 
                 <button
-                  onClick={() => setShowNewModal(true)}
+                  onClick={() => { setReanalyzeMedia(null); setShowNewModal(true); }}
                   className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-medium flex items-center gap-2 shadow-lg shadow-emerald-900/30"
                 >
                   <Plus className="w-4 h-4" /> Analyze Media
                 </button>
               </div>
 
+              {activeMedia && <button className="text-xs px-3 py-2 bg-slate-800 rounded-lg" onClick={() => {
+                setReanalyzeMedia(activeMedia); setShowNewModal(true);
+              }}>Reanalyze this media with improved detector</button>}
+              {runs.length>0 && <label className="block text-sm">Saved analysis
+                <select aria-label="Saved analysis" value={selectedRunId || ''} className="block w-full bg-slate-800 rounded p-2 mt-1"
+                  onChange={event => setSelectedRunId(event.target.value)}>
+                  {runs.map(run => <option key={run.id} value={run.id}>
+                    {run.created_at.replace('T',' ').slice(0,19)} UTC | minimum score {(run.confidence_threshold*100).toFixed(0)}% | peak {run.peak_count ?? 'pending'} | {run.status}
+                  </option>)}
+                </select>
+              </label>}
+              {runLoading && <p role="status">Loading saved analytics...</p>}
+              {runError && <p role="alert" className="text-red-300">{runError}</p>}
+              {selectedRun?.result_available && selectedRun.peak_count === 0 && <div role="alert" className="p-4 rounded-lg bg-amber-500/10 text-amber-200 space-y-2">
+                <p>No people passed this run's detection filter. Clusters and motion cannot be formed from zero detections.</p>
+                <p>Minimum detection score: {(selectedRun.confidence_threshold*100).toFixed(0)}%. This is a filtering threshold, not accuracy.
+                  {selectedRun.confidence_threshold>.6 ? ' A high threshold can reject every person; start at 25%.' : ' Review the detector and source footage.'}</p>
+                {previousWithDetections && <button className="underline" onClick={() => setSelectedRunId(previousWithDetections.id)}>View previous run with detections</button>}
+              </div>}
               {/* Job Progress Indicator if running */}
               {activeJob && (activeJob.status === 'QUEUED' || activeJob.status === 'RUNNING') && (
                 <div className="p-4 bg-emerald-500/10 border border-emerald-500/20 rounded-xl space-y-2">
@@ -300,19 +288,24 @@ export const App: React.FC = () => {
                 </div>
               )}
 
+              {activeJob?.status === 'FAILED' && <p role="alert" className="text-red-400">{activeJob.error_message}</p>}
+              {activeJob?.status === 'CANCELLED' && <p className="text-amber-300">Analysis cancelled.</p>}
+              {activeJob && ['QUEUED','RUNNING'].includes(activeJob.status) && <button className="text-sm text-red-300"
+                onClick={async () => setActiveJob(await api.cancelJob(activeJob.id))}>Cancel analysis</button>}
               {/* Active Media & Synchronized Canvas Player */}
               {mediaUrl && (
                 <ResultCanvas
+                  jobId={activeJob?.id}
                   mediaUrl={mediaUrl}
-                  result={activeResult}
-                  chunks={chunks}
+                  result={activeResult?.job_id === activeJob?.id && activeJob?.media_asset_id === activeMedia?.id ? activeResult : null}
+                  chunks={activeJob?.media_asset_id === activeMedia?.id ? chunks : []}
                   mediaType={activeMedia?.media_type || 'IMAGE'}
                   isAnalyzing={activeJob?.status === 'RUNNING'}
                 />
               )}
 
               {/* Analysis Results Metrics Display */}
-              {activeResult ? (
+              {activeResult && activeMedia?.media_type === 'IMAGE' ? (
                 <div className="space-y-6">
                   <MetricsOverview
                     sessionId={activeSession.id}
@@ -329,7 +322,7 @@ export const App: React.FC = () => {
                     Upload an aerial photograph or drone video to calculate hierarchical crowd clusters, closeness, and collective movement.
                   </p>
                   <button
-                    onClick={() => setShowNewModal(true)}
+                    onClick={() => { setReanalyzeMedia(null); setShowNewModal(true); }}
                     className="mt-2 px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs font-medium"
                   >
                     Upload Media & Run Pipeline
@@ -350,8 +343,10 @@ export const App: React.FC = () => {
       {showNewModal && activeSession && (
         <NewAnalysisModal
           session={activeSession}
+          initialMedia={reanalyzeMedia}
           onJobStarted={(job) => {
-            setActiveJob(job);
+            setActiveResult(null); setChunks([]); setSelectedRunId(job.id); setActiveJob(job);
+            api.listSessionJobs(job.session_id).then(setRuns).catch(error => setRunError(String(error)));
             setShowNewModal(false);
           }}
           onClose={() => setShowNewModal(false)}

@@ -91,6 +91,7 @@ data/temporary/*
 *.sqlite3
 *.log
 *.pid
+/backend/models/*.onnx
 
 # ==========================================
 # IDE & OS

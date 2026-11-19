@@ -31,10 +31,13 @@ export const VideoAnalytics: React.FC<Props> = ({frame,frames,time,jobId,seek}) 
     </div>
     {error && <p role="alert">{error}</p>}
     {frame?.detection_diagnostics && frame.crowd_count === 0 &&
-      (frame.detection_diagnostics.candidates_at_recommended_threshold || 0)>0 && <p role="alert" className="text-amber-200 text-sm">
+      (frame.detection_diagnostics.candidates_at_diagnostic_threshold ??
+        frame.detection_diagnostics.candidates_at_recommended_threshold ?? 0)>0 && <p role="alert" className="text-amber-200 text-sm">
         The {(100*(frame.detection_diagnostics.requested_threshold || 0)).toFixed(0)}% filter rejected all people in this sample.
-        This same model pass found {frame.detection_diagnostics.candidates_at_recommended_threshold} candidates at 25%.
-        Reanalyze at 25% to use them; the saved count has not been silently changed.
+        This same model pass found {frame.detection_diagnostics.candidates_at_diagnostic_threshold ??
+          frame.detection_diagnostics.candidates_at_recommended_threshold} candidates at {
+            (100*(frame.detection_diagnostics.diagnostic_threshold ?? .25)).toFixed(0)}%.
+        This is not a recommendation to lower the filter; compare thresholds on labelled images.
       </p>}
     <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
       {[

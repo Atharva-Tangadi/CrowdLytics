@@ -27,6 +27,18 @@ from types import SimpleNamespace
 logger = logging.getLogger("crowdlytics.worker")
 
 
+def detection_annotations(points):
+    """Serialize the exact visible detections used by the count."""
+    return [
+        {
+            "bbox": [round(float(value), 2) for value in point.bbox] if point.bbox else None,
+            "center": [round(float(point.x), 2), round(float(point.y), 2)],
+            "confidence": round(float(point.confidence), 4),
+        }
+        for point in points
+    ]
+
+
 def angle_to_8way_direction(angle_deg: Any, speed: float, min_speed: float = 0.5) -> str:
     """Maps continuous angle [0, 360) in image coordinates to 8-way compass direction."""
     if angle_deg is None or speed < min_speed:
@@ -156,13 +168,16 @@ def execute_analysis_job(job_id: str) -> None:
             if img is None:
                 raise ValueError("Failed to read image from storage.")
 
-            processed_img, scale = preprocessor.preprocess(img)
+            processed_img, scale = preprocessor.preprocess(
+                img, preserve_resolution=getattr(detector, "detection_mode", None) == "aerial"
+            )
 
             job.current_stage = "Localizing crowd members"
             job.progress_pct = 40
             db.commit()
 
             detection_res = detector.detect(processed_img, confidence_threshold=conf_thresh)
+            detection_count = len(detection_res.points)
 
             # Rescale points to original coordinates
             if scale != 1.0 and scale > 0:
@@ -187,7 +202,7 @@ def execute_analysis_job(job_id: str) -> None:
             # Persist Result
             result = CrowdAnalysisResult(
                 job_id=job.id,
-                total_crowd_count=detection_res.total_count,
+                total_crowd_count=detection_count,
                 confidence_score=detection_res.mean_confidence,
                 cluster_count=len(clustering_res.clusters),
                 mean_closeness_px=closeness_summary.global_mean_nn_distance,
@@ -202,6 +217,8 @@ def execute_analysis_job(job_id: str) -> None:
                     "media_type": "IMAGE",
                     "detector": detection_res.model_name,
                     "detector_metadata": detection_res.metadata,
+                    "detections": detection_annotations(detection_res.points),
+                    "detection_count": detection_count,
                     "annotation_version": 3,
                     "media_asset_id": media.id,
                     "group_annotations": [{"cluster_id": c.cluster_id, "convex_hull": convex_hull(c.member_points),
@@ -326,7 +343,8 @@ def execute_analysis_job(job_id: str) -> None:
 
                     latest_clustering = clustering
                     latest_closeness = closeness
-                    latest_count = det.total_count
+                    detection_count = len(det.points)
+                    latest_count = detection_count
                     latest_conf = det.mean_confidence
 
                     motions = (membership_tracker.update(clustering.clusters,observations,current_timestamp)
@@ -335,7 +353,7 @@ def execute_analysis_job(job_id: str) -> None:
                     for motion in motions:
                         if motion["motion_angle_deg"] is not None:
                             all_sampled_directions.append(motion["motion_angle_deg"])
-                    crowd_event = (increase_detector.update(current_timestamp, det.total_count,
+                    crowd_event = (increase_detector.update(current_timestamp, detection_count,
                                    valid=scene_stable or prev_frame is None)
                                    if options.crowd_increase.enabled else {"state": "DISABLED"})
 
@@ -378,13 +396,14 @@ def execute_analysis_job(job_id: str) -> None:
                         "camera_status": camera_status,
                         "crowd_event": crowd_event,
                         "frame_index": frame_idx,
-                        "crowd_count": det.total_count,
-                        "tracked_count": len(observations) if learned else det.total_count,
+                        "crowd_count": detection_count,
+                        "tracked_count": len(observations) if learned else detection_count,
                         "cluster_count": len(clustering.clusters),
                         "mean_closeness_px": closeness.global_mean_nn_distance,
                         "mean_density_per_kpx": closeness.global_mean_density_per_kpx,
                         "detector": det.model_name,
                         "detection_diagnostics": det.metadata,
+                        "detections": detection_annotations(det.points),
                         "confidence": round(det.mean_confidence, 2),
                         "groups": frame_groups_data
                     })

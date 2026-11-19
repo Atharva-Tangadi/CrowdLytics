@@ -13,7 +13,8 @@ class ImagePreprocessor:
     def preprocess(
         self,
         image: np.ndarray,
-        roi_mask: Optional[np.ndarray] = None
+        roi_mask: Optional[np.ndarray] = None,
+        preserve_resolution: bool = False
     ) -> Tuple[np.ndarray, float]:
         """
         Preprocesses an input image (BGR).
@@ -28,10 +29,13 @@ class ImagePreprocessor:
         h, w = image.shape[:2]
         scale = 1.0
         
-        # Scale down if exceeds max_dimension
+        # Tiled aerial inference benefits from keeping the source pixels intact.
+        max_dimension = None if preserve_resolution else self.max_dimension
         max_side = max(h, w)
-        if max_side > self.max_dimension:
-            scale = self.max_dimension / float(max_side)
+        if max_dimension is not None and max_side > max_dimension:
+            if max_dimension <= 0:
+                raise ValueError("max_dimension must be positive or None.")
+            scale = max_dimension / float(max_side)
             new_w = int(round(w * scale))
             new_h = int(round(h * scale))
             processed = cv2.resize(image, (new_w, new_h), interpolation=cv2.INTER_AREA)

@@ -19,7 +19,7 @@ export const MetricsOverview: React.FC<{ sessionId: string; result: AnalysisResu
           </div>
           <div className="text-2xl font-bold text-white">{result.total_crowd_count}</div>
           <div className="text-[11px] text-emerald-400 mt-1">
-            Detector score: {(result.confidence_score * 100).toFixed(0)}%
+            Mean box score (not accuracy): {(result.confidence_score * 100).toFixed(0)}%
           </div>
         </div>
 

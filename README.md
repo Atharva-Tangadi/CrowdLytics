@@ -1,19 +1,19 @@
 # Aerial Crowd Intelligence
 
-> **Video output update:** real footage now defaults to a local overhead-person
-> ONNX detector, persistent member-based groups, playback-synchronized count cards
-> and stored timeline analytics. Run `python scripts/setup_person_model.py` once
-> when setting up a new machine. See [video playback fixes](docs/video-playback-fixes.md).
+> **Detection modes:** select a tiled overhead YOLO11 detector for aerial imagery or
+> an OpenCV Zoo YOLOX-S detector for ground-level views. Install
+> weights locally with `python scripts/setup_person_model.py` and, for CCTV,
+> `python scripts/setup_cctv_model.py`. See [model details](backend/models/README.md)
+> and the labelled-image evaluation workflow below.
 
 > **Login-free local workspace:** the app opens directly to the dashboard. All existing
 > sessions and media are accessible locally without accounts or tokens. Legacy user
 > rows are preserved for database compatibility; no migration or re-registration is needed.
 
-> Updated implementation: see [enhancement report](docs/enhancement-report.md) for
-> timestamped cluster speed, static-camera mode, sudden crowd-increase events,
-> hull controls, current defaults, verification and limitations. Counts still use
-> a heuristic blob detector; detector scores and synthetic benchmarks do not
-> establish real-world crowd-count accuracy. New direction angles use 90°=up.
+> Counts represent visible person detections returned by the selected model, not
+> guaranteed ground truth. Scores are confidence filters, not accuracy estimates.
+> Validate thresholds and model choice on labelled images from the target camera
+> views; no detector is expected to be universally accurate.
 
 **Hierarchical Clustering-Based Spatial Grouping, Closeness Estimation, and Collective Movement Analysis**
 
@@ -30,8 +30,8 @@ Aerial Crowd Intelligence is built from the ground up for **crowd-level and grou
 | Feature | Aerial Photograph (Image) | Drone Video | Technical Implementation |
 | :--- | :---: | :---: | :--- |
 | **Media Validation & Storage** | Yes (JPEG, PNG) | Yes (MP4, H.264) | Content inspection & private `data/uploads/` storage |
-| **Spatial Localization** | Yes | Yes (sampled frames) | Multi-scale adaptive Otsu blob density contour segmentation |
-| **Crowd Count Estimation** | Yes | Yes (time-series) | Group-level point summation; confidence-weighted |
+| **Spatial Localization** | Yes | Yes (sampled frames) | Mode-selected local detector; optional synthetic blob demo |
+| **Crowd Count Estimation** | Yes | Yes (time-series) | Number of visible person detections after confidence/NMS filtering |
 | **Hierarchical Spatial Clustering** | Yes | Yes (per window) | SciPy Agglomerative Clustering (Ward, Complete, Average) |
 | **Cophenetic Correlation ($r$)** | Yes | Yes | Tree fidelity verification ($r \ge 0.97$, minimal distortion) |
 | **Spatial Closeness & Dispersion** | Yes | Yes | SciPy `cKDTree` 1-Nearest Neighbor search ($\mathcal{O}(N \log N)$) |
@@ -127,7 +127,7 @@ docker compose -f deployment/docker/compose.yaml down
 ```bash
 .\.venv-win\Scripts\pytest backend/tests
 ```
-**Test Coverage (26 passing tests):**
+**Test Coverage:**
 - `test_health.py`: Liveness and database readiness probe checks.
 - `test_cv_algorithms.py`: Preprocessing, blob localization, Ward/Complete/Average HAC comparisons, KDTree NN closeness, degenerate geometry, Lucas-Kanade optical flow, and group formation transitions.
 - `test_api_workflow.py`: Authentication, sessions, media upload, job lifecycle, results retrieval, CSV/JSON export, cancellation, and media deletion.
@@ -150,6 +150,43 @@ cd ..
 - $N=100$: HAC $4.28\text{ ms}$, Closeness $29.34\text{ ms}$, Total $33.61\text{ ms}$, Peak RAM $283\text{ KB}$, Cophenetic $r=0.973$.
 - $N=500$: HAC $19.47\text{ ms}$, Closeness $38.80\text{ ms}$, Total $58.27\text{ ms}$, Peak RAM $6.85\text{ MB}$, Cophenetic $r=0.971$.
 - Camera Motion Compensation: Latency $16.95\text{ ms}$, Sub-pixel shift error $< 0.0003\text{ px}$.
+
+### Evaluating Detection on Labelled Images
+
+Install both model files locally:
+
+```bash
+python scripts/setup_person_model.py
+python scripts/setup_cctv_model.py
+```
+
+Create a JSON manifest with one entry per labelled image. Paths may be absolute or
+relative to the manifest. Each ground-truth box is `[x1, y1, x2, y2]` in original
+image pixels:
+
+```json
+{
+  "images": [
+    {"image": "aerial/plaza.png", "boxes": [[100, 40, 125, 95], [180, 35, 205, 91]]},
+    {"image": "cctv/lobby.jpg", "boxes": [[310, 80, 380, 260]]}
+  ]
+}
+```
+
+Run both modes at several confidence thresholds; the evaluator reports pooled
+precision, recall, F1 and count mean absolute error (MAE), matching boxes at IoU 0.5.
+The UI's 25% initial threshold is only a starting value, not a recommended operating
+point; choose a threshold based on labelled examples and the false-positive/recall
+tradeoff for the target camera.
+
+```bash
+python scripts/evaluate_detectors.py labelled-crowds.json --thresholds 0.15 0.25 0.35 0.5 --output detector-results.json
+```
+
+Use the *same labelled images* to compare thresholds and detector modes. Include
+separate overhead, CCTV, daytime/nighttime, sparse/dense, and occluded scenes as
+appropriate. The returned metrics describe only those labelled examples and are not
+a promise of performance on other footage.
 
 ---
 

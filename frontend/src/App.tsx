@@ -267,7 +267,7 @@ export const App: React.FC = () => {
               {selectedRun?.result_available && selectedRun.peak_count === 0 && <div role="alert" className="p-4 rounded-lg bg-amber-500/10 text-amber-200 space-y-2">
                 <p>No people passed this run's detection filter. Clusters and motion cannot be formed from zero detections.</p>
                 <p>Minimum detection score: {(selectedRun.confidence_threshold*100).toFixed(0)}%. This is a filtering threshold, not accuracy.
-                  {selectedRun.confidence_threshold>.6 ? ' A high threshold can reject every person; start at 25%.' : ' Review the detector and source footage.'}</p>
+                  {selectedRun.confidence_threshold>.6 ? ' A high threshold can reject detections; compare alternatives on labelled images before changing it.' : ' Review the detector and source footage.'}</p>
                 {previousWithDetections && <button className="underline" onClick={() => setSelectedRunId(previousWithDetections.id)}>View previous run with detections</button>}
               </div>}
               {/* Job Progress Indicator if running */}

@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     ENVIRONMENT: str = "development"
     DEFAULT_DETECTOR: str = "person"
     PERSON_MODEL_PATH: str = str(BASE_DIR / "models" / "overhead_person.onnx")
+    CCTV_MODEL_PATH: str = str(BASE_DIR / "models" / "cctv_yolox_s.onnx")
 
     # Database
     DATABASE_URL: str = f"sqlite:///{BASE_DIR}/crowdlytics.db"

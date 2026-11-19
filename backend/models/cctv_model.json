@@ -1,0 +1,10 @@
+{
+  "name": "OpenCV Zoo YOLOX-S COCO",
+  "source": "https://huggingface.co/opencv/object_detection_yolox/resolve/78c368f74ce73ee28fc7a1be418a598c71b58b52/object_detection_yolox_2022nov.onnx",
+  "revision": "78c368f74ce73ee28fc7a1be418a598c71b58b52",
+  "license": "Apache-2.0 (OpenCV Zoo)",
+  "training_data": "COCO 2017",
+  "domain_note": "General object detector; not CCTV-specific fine-tuning",
+  "sha256": "c5c2d13e59ae883e6af3b45daea64af4833a4951c92d116ec270d9ddbe998063",
+  "bytes": 35858002
+}

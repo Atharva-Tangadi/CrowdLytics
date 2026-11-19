@@ -1,5 +1,5 @@
 import React, { useRef, useEffect, useState, useMemo, useCallback } from 'react';
-import { AnalysisResult, AnalysisChunk, FrameAnnotation } from '../../types/api';
+import { AnalysisResult, AnalysisChunk, FrameAnnotation, PersonDetectionAnnotation } from '../../types/api';
 import { details, matchingFrame } from './annotations';
 import { VideoAnalytics } from './VideoAnalytics';
 
@@ -28,11 +28,13 @@ export const ResultCanvas: React.FC<ResultCanvasProps> = ({ mediaUrl, jobId, res
   const [arrows, setArrows] = useState(true);
   const [speeds, setSpeeds] = useState(true);
   const [events, setEvents] = useState(true);
+  const [personBoxes, setPersonBoxes] = useState(true);
   const [detailed, setDetailed] = useState(false);
   const [arrowLength, setArrowLength] = useState(36);
   const [time, setTime] = useState(0);
   const [frameData, setFrameData] = useState<FrameAnnotation | null>(null);
   const summary = useMemo(() => details(result), [result]);
+  const imageDetectionCount = summary.detection_count ?? summary.detections?.length ?? result?.total_crowd_count ?? 0;
   const frames = useMemo(() => {
     const values: FrameAnnotation[] = [];
     for (const chunk of chunks) {
@@ -66,6 +68,23 @@ export const ResultCanvas: React.FC<ResultCanvasProps> = ({ mediaUrl, jobId, res
       setTime(video?.currentTime || 0);
     }
     if (!visible) return;
+    const detections: PersonDetectionAnnotation[] = mediaType === 'VIDEO'
+      ? current?.detections || [] : summary.detections || [];
+    if (personBoxes) detections.forEach(detection => {
+      const [x1, y1, x2, y2] = detection.bbox || [
+        detection.center[0] - 4, detection.center[1] - 4,
+        detection.center[0] + 4, detection.center[1] + 4,
+      ];
+      ctx.strokeStyle = '#fb923c';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(x1, y1, Math.max(x2 - x1, 1), Math.max(y2 - y1, 1));
+      const label = `${(detection.confidence * 100).toFixed(0)}%`;
+      ctx.font = 'bold 11px sans-serif';
+      ctx.fillStyle = '#0f172add';
+      ctx.fillRect(x1, Math.max(0, y1 - 16), ctx.measureText(label).width + 6, 15);
+      ctx.fillStyle = '#fdba74';
+      ctx.fillText(label, x1 + 3, Math.max(11, y1 - 4));
+    });
     const groups = mediaType === 'VIDEO' ? current?.groups || [] : (result?.groups || []).map(g => ({
       ...g, group_id: g.cluster_id, centroid: [g.centroid_x,g.centroid_y],
       bounding_box: JSON.parse(g.bounding_box_json),
@@ -113,7 +132,7 @@ export const ResultCanvas: React.FC<ResultCanvasProps> = ({ mediaUrl, jobId, res
         ctx.fillStyle='#fff'; ctx.fillText(`NN: ${g.mean_nn_distance}px | ${g.formation_state || 'Spatial only'}`,x,y+18);
       }
     });
-  }, [mediaType,frames,result,summary,visible,hulls,centroids,arrows,speeds,detailed,arrowLength,showBoxes,isAnalyzing]);
+  }, [mediaType,frames,result,summary,visible,hulls,centroids,arrows,speeds,detailed,arrowLength,showBoxes,isAnalyzing,personBoxes]);
 
   useEffect(() => {
     let disposed = false;
@@ -160,6 +179,7 @@ export const ResultCanvas: React.FC<ResultCanvasProps> = ({ mediaUrl, jobId, res
     </div>
     <div className="flex flex-wrap gap-3 p-3 bg-slate-800 rounded-lg text-xs">
       {([['Overlays',visible,setVisible],['Convex hulls',hulls,setHulls],['Centroids',centroids,setCentroids],
+        ['Person boxes and scores',personBoxes,setPersonBoxes],
         ['Direction arrows',arrows,setArrows],['Speed labels',speeds,setSpeeds],['Crowd events',events,setEvents],
         ['Detailed metrics',detailed,setDetailed]] as const).map(([label,value,setter]) =>
         <label key={label} className="flex gap-1 items-center"><input type="checkbox" checked={value}
@@ -169,7 +189,9 @@ export const ResultCanvas: React.FC<ResultCanvasProps> = ({ mediaUrl, jobId, res
     </div>
     {mediaType === 'VIDEO' && <VideoAnalytics frame={frameData} frames={frames} time={time} jobId={jobId}
       seek={value => { if (videoRef.current) { videoRef.current.currentTime=value; draw(); } }} />}
-    {mediaType === 'IMAGE' ? <p className="text-xs text-slate-400">Spatial analysis only. Direction and speed unavailable.</p> :
+    {mediaType === 'IMAGE' ? <p className="text-xs text-slate-400">
+      Spatial analysis only. Direction and speed unavailable. Visible detections: {imageDetectionCount}.
+    </p> :
       <div className="text-xs text-slate-300 space-y-2">
         <p>{time.toFixed(2)}s | Image-relative directions, not geographic headings. Speed: px/s. Arrows have a fixed display length.</p>
         {noCoverage && <p className="text-amber-300">{isAnalyzing ? 'Buffering analysis for this segment' : 'No valid analysis for this timestamp'}</p>}

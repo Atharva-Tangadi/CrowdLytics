@@ -32,7 +32,7 @@ describe('Image cluster overlays', () => {
     expect(ctx.moveTo).toHaveBeenCalledWith(100,100);
     expect(ctx.arc).toHaveBeenCalledWith(150,133,5,0,Math.PI*2);
     expect(screen.getByText(/Direction and speed unavailable/)).toBeInTheDocument();
-    for (const label of ['Convex hulls','Centroids','Direction arrows','Speed labels','Crowd events'])
+    for (const label of ['Convex hulls','Centroids','Person boxes and scores','Direction arrows','Speed labels','Crowd events'])
       expect(screen.getByLabelText(label)).toBeChecked();
     ctx.moveTo.mockClear();
     fireEvent.click(screen.getByLabelText('Convex hulls'));
@@ -42,5 +42,15 @@ describe('Image cluster overlays', () => {
     render(<ResultCanvas mediaUrl="blob:old" mediaType="IMAGE" result={{...result,summary_data_json:null}} />);
     expect(ctx.moveTo).not.toHaveBeenCalled();
     expect(ctx.arc).toHaveBeenCalled();
+  });
+
+  it('draws per-person boxes and confidence labels from stored detections', () => {
+    const labeled={...result,total_crowd_count:1,summary_data_json:JSON.stringify({
+      annotation_version:3,detection_count:1,detections:[{bbox:[10,20,30,60],center:[20,40],confidence:.87}],
+    }),groups:[]} as AnalysisResult;
+    render(<ResultCanvas mediaUrl="blob:labeled" mediaType="IMAGE" result={labeled} />);
+    expect(ctx.strokeRect).toHaveBeenCalledWith(10,20,20,40);
+    expect(ctx.fillText).toHaveBeenCalledWith('87%',13,16);
+    expect(screen.getByText(/Visible detections: 1/)).toBeInTheDocument();
   });
 });

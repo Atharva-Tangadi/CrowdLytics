@@ -26,7 +26,9 @@ def test_image_geometry_media_identity_and_export():
     assert result['media_asset_id'] == media
     assert result['dominant_direction_deg'] is None
     assert all(g['motion_speed'] is None for g in result['groups'])
-    assert len(json.loads(result['summary_data_json'])['group_annotations'][0]['convex_hull']) == 3
+    details=json.loads(result['summary_data_json'])
+    assert len(details['group_annotations'][0]['convex_hull']) == 3
+    assert details['detection_count']==result['total_crowd_count']==len(details['detections'])
     export = client.get(f'/api/v1/sessions/{session}/results/export').json()
     assert export['media_asset_id'] == media
     assert export['analysis_details']['annotation_version'] == 3
@@ -57,6 +59,7 @@ def test_static_video_motion_crowd_event_and_incremental_chunks(tmp_path):
     chunks = client.get(f'/api/v1/jobs/{job["id"]}/chunks').json()
     frames = [frame for chunk in chunks for frame in json.loads(chunk['frame_data_json'])]
     assert len(frames) == 45
+    assert all(frame['crowd_count']==len(frame['detections']) for frame in frames)
     assert all(a['timestamp'] < b['timestamp'] for a,b in zip(frames,frames[1:]))
     motions = [g for f in frames[2:18] for g in f['groups'] if g['motion_status'] == 'MOVING']
     assert motions and all(g['speed_unit'] == 'px/s' for g in motions)

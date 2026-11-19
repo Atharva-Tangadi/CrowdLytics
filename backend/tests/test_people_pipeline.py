@@ -3,7 +3,10 @@ import cv2
 import numpy as np
 import pytest
 from app.cv.localization.detector import DetectionPoint
-from app.cv.localization.person import PersonDetector
+from app.cv.localization.person import CctvPersonDetector, PersonDetector
+from app.cv.evaluation import DetectionMetrics, intersection_over_union
+from app.cv.preprocessing.processor import ImagePreprocessor
+from app.schemas.api import AnalysisConfigRequest
 from app.cv.motion.people import PersonTracker, MembershipGroupTracker
 from app.cv.clustering.density import DensityClusterer
 from app.cv.clustering.temporal import PersistentSpatialGroups
@@ -64,7 +67,7 @@ def test_person_model_tiled_coordinate_mapping_and_duplicate_suppression(tmp_pat
     # 500px image gets tiles at x=0 and x=116; both see the same person at x=200.
     for offset in (0,116):
         raw=np.zeros((1,5,8400),np.float32)
-        raw[0,:,0]=[(200-offset)*640/384,100*640/384,20*640/384,30*640/384,.9]
+        raw[0,:,0]=[(200-offset)*640/384,70+100*640/384,20*640/384,30*640/384,.9]
         outputs.append(raw)
     net=SimpleNamespace(setInput=lambda _:None,forward=lambda:outputs.pop(0))
     monkeypatch.setattr(cv2.dnn,'readNetFromONNX',lambda _:net)
@@ -75,9 +78,60 @@ def test_person_model_tiled_coordinate_mapping_and_duplicate_suppression(tmp_pat
     assert result.points[0].y==pytest.approx(100)
 
 
+def test_cctv_detector_decodes_yolox_boxes_and_maps_centered_letterbox(tmp_path,monkeypatch):
+    path=tmp_path/'model.onnx';path.write_bytes(b'model')
+    output=np.zeros((1,8400,85),np.float32)
+    anchor=(32*80)+15
+    output[0,anchor,4:6]=[.9,.9]
+    duplicate=anchor+1
+    output[0,duplicate,:6]=[-1,0,0,0,.8,.9]
+    net=SimpleNamespace(setInput=lambda _:None,forward=lambda:output)
+    monkeypatch.setattr(cv2.dnn,'readNetFromONNX',lambda *_:net)
+    detector=CctvPersonDetector(path)
+    result=detector.detect(np.zeros((320,640,3),np.uint8),.25)
+    assert result.total_count==len(result.points)==1
+    assert result.points[0].x==pytest.approx(120)
+    assert result.points[0].y==pytest.approx(96)
+    assert result.points[0].bbox==pytest.approx([116,92,124,100])
+    assert result.points[0].confidence==pytest.approx(.81)
+    assert result.metadata['domain']=='ground_level_general_person_coco'
+    strict=detector.detect(np.zeros((320,640,3),np.uint8),.9)
+    assert strict.total_count==0
+    assert strict.metadata['candidates_at_recommended_threshold']==1
+
+
 def test_model_missing_fails_instead_of_silent_blob_fallback(tmp_path):
     with pytest.raises(ValueError,match='model missing'):
         PersonDetector(tmp_path/'missing.onnx')
+
+
+def test_analysis_config_accepts_modes_and_legacy_person_backend():
+    for mode in ('aerial','cctv','person','blob','auto'):
+        request=AnalysisConfigRequest.model_validate({'media_asset_id':'media','detector_backend':mode})
+        assert request.detector_backend==mode
+
+
+def test_high_resolution_preprocessing_can_preserve_aerial_source_pixels():
+    source=np.zeros((2400,3600,3),np.uint8)
+    processed,scale=ImagePreprocessor().preprocess(source,preserve_resolution=True)
+    assert processed.shape==source.shape
+    assert scale==1
+
+
+def test_detection_metrics_use_one_to_one_iou_matches_and_count_mae():
+    metrics=DetectionMetrics()
+    metrics.add_image(
+        [[0,0,10,10],[0,0,10,10],[20,20,30,30]],
+        [[0,0,10,10],[40,40,50,50]],
+        iou_threshold=.5,
+    )
+    metrics.add_image([],[],iou_threshold=.5)
+    assert intersection_over_union([0,0,10,10],[0,0,10,10])==1
+    assert metrics.as_dict()=={
+        'images':2,'true_positives':1,'false_positives':2,'false_negatives':1,
+        'precision':pytest.approx(1/3),'recall':pytest.approx(.5),
+        'f1':pytest.approx(.4),'count_mae':pytest.approx(.5),
+    }
 
 
 def test_high_threshold_returns_zero_with_diagnostics_not_a_silent_fallback(tmp_path,monkeypatch):

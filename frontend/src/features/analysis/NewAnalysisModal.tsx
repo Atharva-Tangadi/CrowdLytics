@@ -23,7 +23,7 @@ export const NewAnalysisModal: React.FC<NewAnalysisModalProps> = ({
   const [error, setError] = useState<string | null>(null);
 
   // Analytical Parameters
-  const [detector, setDetector] = useState<'person' | 'blob'>('person');
+  const [detector, setDetector] = useState<'aerial' | 'cctv' | 'blob'>('aerial');
   const [grouping, setGrouping] = useState<'density' | 'hac'>('density');
   const [confThresh, setConfThresh] = useState(0.25);
   const [distThresh, setDistThresh] = useState(50.0);
@@ -151,13 +151,21 @@ export const NewAnalysisModal: React.FC<NewAnalysisModalProps> = ({
 
         {/* Parameter Configuration */}
         <div className="space-y-4 pt-2 border-t border-slate-800">
-          <label className="block text-xs">Detector <select aria-label="Detector" className="bg-slate-800 p-2 ml-2" value={detector} onChange={e => setDetector(e.target.value as 'person'|'blob')}>
-            <option value="person">Overhead person model (local)</option><option value="blob">Synthetic blob demo only</option>
+          <label className="block text-xs">Detection mode <select aria-label="Detection mode" className="bg-slate-800 p-2 ml-2" value={detector} onChange={e => setDetector(e.target.value as 'aerial'|'cctv'|'blob')}>
+            <option value="aerial">Aerial / drone (overhead YOLO11)</option>
+            <option value="cctv">CCTV / ground-level (general COCO YOLOX-S)</option>
+            <option value="blob">Synthetic blob demo only</option>
           </select></label>
           <label className="block text-xs">Grouping <select aria-label="Grouping" className="bg-slate-800 p-2 ml-2" value={grouping} onChange={e => setGrouping(e.target.value as 'density'|'hac')}>
             <option value="density">Spatial neighborhoods (persistent members)</option><option value="hac">Hierarchical clustering (HAC)</option>
           </select></label>
-          <p className="text-xs text-slate-400">The learned model estimates visible people. A 90% threshold discards most difficult detections; start at 25%. Reanalysis replaces the displayed run while retaining previous data.</p>
+          <p className="text-xs text-slate-400">
+            Choose the mode that matches the camera view. CCTV uses general COCO weights,
+            not surveillance-specific fine-tuning. Install them with
+            <code className="mx-1">python scripts/setup_cctv_model.py</code>.
+            Detection score is a filter, not model accuracy; use labelled images to tune it.
+            Reanalysis retains previous runs.
+          </p>
           <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-slate-400">
             <Sliders className="w-4 h-4 text-emerald-400" /> Analysis Parameters
           </div>
@@ -178,7 +186,7 @@ export const NewAnalysisModal: React.FC<NewAnalysisModalProps> = ({
                 className="w-full accent-emerald-500"
               />
               <span className="text-[10px] text-slate-500">
-                Filter only; this is not model accuracy
+                Default starting point; calibrate using labelled images
               </span>
             </div>
 
@@ -219,9 +227,8 @@ export const NewAnalysisModal: React.FC<NewAnalysisModalProps> = ({
               </span>
             </div>
           </div>
-          {detector === 'person' && confThresh > .6 && <div role="alert" className="p-3 rounded bg-amber-500/10 text-amber-200 text-xs space-y-2">
-            <p>A {(confThresh*100).toFixed(0)}% minimum score can remove every detection. Increasing this value does not improve the model's accuracy.</p>
-            <button className="underline" onClick={() => setConfThresh(.25)}>Use recommended 25% minimum score</button>
+          {detector !== 'blob' && confThresh > .6 && <div role="alert" className="p-3 rounded bg-amber-500/10 text-amber-200 text-xs space-y-2">
+            <p>A {(confThresh*100).toFixed(0)}% minimum score can remove detections. Lowering it can add false positives; compare thresholds against labelled images before changing it.</p>
           </div>}
         </div>
 

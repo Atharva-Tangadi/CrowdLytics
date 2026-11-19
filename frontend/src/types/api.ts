@@ -61,6 +61,12 @@ export interface FrameGroupAnnotation {
   formation_state: string;
 }
 
+export interface PersonDetectionAnnotation {
+  bbox: [number, number, number, number] | null;
+  center: [number, number];
+  confidence: number;
+}
+
 export interface CrowdEvent {
   state: string;
   timestamp?: number;
@@ -81,7 +87,14 @@ export interface FrameAnnotation {
   mean_closeness_px?: number;
   mean_density_per_kpx?: number;
   detector?: string;
-  detection_diagnostics?: {requested_threshold?: number; max_detection_score?: number; candidates_at_recommended_threshold?: number | null};
+  detection_diagnostics?: {
+    requested_threshold?: number;
+    diagnostic_threshold?: number;
+    max_detection_score?: number;
+    candidates_at_diagnostic_threshold?: number | null;
+    candidates_at_recommended_threshold?: number | null;
+  };
+  detections?: PersonDetectionAnnotation[];
   timestamp: number;
   frame_index: number;
   crowd_count: number;
@@ -134,7 +147,7 @@ export interface AnalysisResult {
 
 export interface AnalysisConfig {
   media_asset_id: string;
-  detector_backend?: 'auto' | 'person' | 'blob';
+  detector_backend?: 'auto' | 'person' | 'aerial' | 'cctv' | 'blob';
   clustering_method?: 'hac' | 'density';
   confidence_threshold: number;
   distance_threshold: number;

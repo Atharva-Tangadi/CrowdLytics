@@ -60,7 +60,7 @@ class CrowdIncreaseConfig(BaseModel):
 
 class AnalysisConfigRequest(BaseModel):
     media_asset_id: str
-    detector_backend: str = Field("auto", pattern="^(auto|person|blob)$")
+    detector_backend: str = Field("auto", pattern="^(auto|person|aerial|cctv|blob)$")
     clustering_method: str = Field("hac", pattern="^(hac|density)$")
     track_hold_seconds: float = Field(.6, ge=0, le=2)
     confidence_threshold: float = Field(0.3, ge=0.05, le=0.95)

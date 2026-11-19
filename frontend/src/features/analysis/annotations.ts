@@ -1,4 +1,4 @@
-import { AnalysisResult, FrameAnnotation, FrameGroupAnnotation } from '../../types/api';
+import { AnalysisResult, FrameAnnotation, FrameGroupAnnotation, PersonDetectionAnnotation } from '../../types/api';
 
 export function details(result?: AnalysisResult | null): {
   annotation_version?: number;
@@ -6,6 +6,8 @@ export function details(result?: AnalysisResult | null): {
   crowd_events?: import('../../types/api').CrowdEvent[];
   media_type?: string;
   detector?: string;
+  detections?: PersonDetectionAnnotation[];
+  detection_count?: number;
 } {
   try { return JSON.parse(result?.summary_data_json || '{}'); } catch { return {}; }
 }

@@ -9,6 +9,11 @@ describe('Detection threshold guidance', () => {
     render(<NewAnalysisModal session={{id:'s',title:'Test'} as AnalysisSession}
       initialMedia={{id:'m',media_type:'VIDEO',original_filename:'clip.mp4'} as MediaAsset}
       onJobStarted={() => {}} onClose={() => {}} />);
+    const additionalSettings=screen.getByLabelText('Additional settings');
+    expect(additionalSettings).toHaveAttribute('title','Additional settings');
+    expect(additionalSettings.closest('details')).not.toHaveAttribute('open');
+    expect(screen.getByRole('button',{name:'Launch Intelligence Pipeline'})).toBeVisible();
+    fireEvent.click(additionalSettings);
     const slider=screen.getByRole('slider',{name:'Minimum detection score'});
     expect(slider).toHaveValue('0.25');
     fireEvent.change(slider,{target:{value:'0.9'}});
@@ -16,5 +21,8 @@ describe('Detection threshold guidance', () => {
     fireEvent.click(screen.getByRole('button',{name:'Use recommended 25% minimum score'}));
     expect(slider).toHaveValue('0.25');
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    fireEvent.click(additionalSettings);
+    expect(additionalSettings.closest('details')).not.toHaveAttribute('open');
+    expect(slider).not.toBeVisible();
   });
 });

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Upload, Video, Image as ImageIcon, Sliders, Play, AlertCircle } from 'lucide-react';
+import { Upload, Video, Image as ImageIcon, Sliders, Play, AlertCircle, Ellipsis } from 'lucide-react';
 import { api } from '../../services/api';
 import { AnalysisSession, MediaAsset, AnalysisJob } from '../../types/api';
 
@@ -150,7 +150,12 @@ export const NewAnalysisModal: React.FC<NewAnalysisModalProps> = ({
         )}
 
         {/* Parameter Configuration */}
-        <div className="space-y-4 pt-2 border-t border-slate-800">
+        <details>
+          <summary aria-label="Additional settings" title="Additional settings" className="ml-auto flex h-9 w-9 cursor-pointer list-none items-center justify-center rounded-lg border border-slate-700 text-slate-400 hover:bg-slate-800 hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-500 [&::-webkit-details-marker]:hidden">
+            <Ellipsis className="h-5 w-5" aria-hidden="true" />
+          </summary>
+          <div className="mt-3 space-y-5 rounded-xl border border-slate-700 bg-slate-900/50 p-4">
+        <div className="space-y-4">
           <label className="block text-xs">Detector <select aria-label="Detector" className="bg-slate-800 p-2 ml-2" value={detector} onChange={e => setDetector(e.target.value as 'person'|'blob')}>
             <option value="person">Overhead person model (local)</option><option value="blob">Synthetic blob demo only</option>
           </select></label>
@@ -241,6 +246,8 @@ export const NewAnalysisModal: React.FC<NewAnalysisModalProps> = ({
           </div>
           <p className="text-slate-400">Speed is in px/s. Directions are image-relative. Count increases are not proof of an organized flash mob. Baseline needs at least 3 seconds of valid history.</p>
         </fieldset>}
+          </div>
+        </details>
         {/* Action Controls */}
         <div className="flex justify-end gap-3 pt-4 border-t border-slate-800">
           <button
